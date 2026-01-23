@@ -17,6 +17,8 @@ path = "src/main.rs"
 [features]
 default = []
 rerun = ["dep:rerun"]
+# Per-node threading infrastructure (Phase 1 of threading refactor)
+per_node_threading = []
 
 [dependencies]
 meshcore-packet.workspace = true
@@ -44,6 +46,7 @@ hex = "0.4"
 parking_lot = "0.12"
 rayon = "1.10"
 memory-stats = "1.2"
+crossbeam-channel = "0.5"
 
 [dev-dependencies]
 serial_test = "3.0"
