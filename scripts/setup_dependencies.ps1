@@ -170,8 +170,8 @@ if (-not $SkipItm) {
             $releaseInfo = Invoke-RestMethod -Uri $ItmReleasesUrl -UseBasicParsing
             $ProgressPreference = 'Continue'
             
-            # Find the Windows DLL asset
-            $dllAsset = $releaseInfo.assets | Where-Object { $_.name -match "itm.*\.dll$" -or $_.name -match "win.*\.zip$" -or $_.name -match "windows.*\.zip$" }
+            # Find the Windows x64 DLL asset
+            $dllAsset = $releaseInfo.assets | Where-Object { $_.name -eq "x64.zip" -or $_.name -match "itm.*\.dll$" -or $_.name -match "win.*\.zip$" -or $_.name -match "windows.*\.zip$" }
             
             if ($dllAsset) {
                 $downloadUrl = $dllAsset.browser_download_url
@@ -183,6 +183,14 @@ if (-not $SkipItm) {
                     if (Download-File -Url $downloadUrl -OutputPath $zipPath -Description "ITM release ($assetName)") {
                         Extract-Archive -ArchivePath $zipPath -DestinationPath $ItmDir
                         Remove-Item $zipPath -Force
+                        
+                        # Find and move the itm.dll to the expected location
+                        $foundDll = Get-ChildItem -Path $ItmDir -Recurse -Filter "itm.dll" | Select-Object -First 1
+                        if ($foundDll -and $foundDll.FullName -ne $ItmDll) {
+                            Move-Item -Path $foundDll.FullName -Destination $ItmDll -Force
+                            # Clean up extracted subdirectories
+                            Get-ChildItem -Path $ItmDir -Directory | Remove-Item -Recurse -Force
+                        }
                     }
                 }
                 else {
@@ -238,8 +246,9 @@ if (-not $SkipRerun) {
             $version = $releaseInfo.tag_name
             Write-Host "  Latest version: $version" -ForegroundColor Gray
             
-            # Find Windows x86_64 asset
+            # Find Windows x86_64 asset (can be a .zip or standalone .exe)
             $windowsAsset = $releaseInfo.assets | Where-Object { 
+                $_.name -match "rerun-cli.*x86_64.*windows.*\.exe$" -or
                 $_.name -match "rerun.*windows.*x86_64.*\.zip$" -or 
                 $_.name -match "rerun.*x86_64.*windows.*\.zip$" -or
                 $_.name -match "rerun.*win64.*\.zip$"
@@ -247,18 +256,26 @@ if (-not $SkipRerun) {
             
             if ($windowsAsset) {
                 $downloadUrl = $windowsAsset.browser_download_url
-                $zipPath = Join-Path $RerunDir "rerun_temp.zip"
+                $assetName = $windowsAsset.name
                 
-                if (Download-File -Url $downloadUrl -OutputPath $zipPath -Description "Rerun viewer ($($windowsAsset.name))") {
-                    Extract-Archive -ArchivePath $zipPath -DestinationPath $RerunDir
-                    Remove-Item $zipPath -Force
+                if ($assetName -match "\.exe$") {
+                    # Direct exe download
+                    Download-File -Url $downloadUrl -OutputPath $RerunExe -Description "Rerun viewer ($assetName)"
+                }
+                elseif ($assetName -match "\.zip$") {
+                    $zipPath = Join-Path $RerunDir "rerun_temp.zip"
                     
-                    # Find and move the rerun.exe to the expected location
-                    $foundExe = Get-ChildItem -Path $RerunDir -Recurse -Filter "rerun.exe" | Select-Object -First 1
-                    if ($foundExe -and $foundExe.FullName -ne $RerunExe) {
-                        Move-Item -Path $foundExe.FullName -Destination $RerunExe -Force
-                        # Clean up extracted subdirectories
-                        Get-ChildItem -Path $RerunDir -Directory | Remove-Item -Recurse -Force
+                    if (Download-File -Url $downloadUrl -OutputPath $zipPath -Description "Rerun viewer ($assetName)") {
+                        Extract-Archive -ArchivePath $zipPath -DestinationPath $RerunDir
+                        Remove-Item $zipPath -Force
+                        
+                        # Find and move the rerun.exe to the expected location
+                        $foundExe = Get-ChildItem -Path $RerunDir -Recurse -Filter "rerun.exe" | Select-Object -First 1
+                        if ($foundExe -and $foundExe.FullName -ne $RerunExe) {
+                            Move-Item -Path $foundExe.FullName -Destination $RerunExe -Force
+                            # Clean up extracted subdirectories
+                            Get-ChildItem -Path $RerunDir -Directory | Remove-Item -Recurse -Force
+                        }
                     }
                 }
             }
