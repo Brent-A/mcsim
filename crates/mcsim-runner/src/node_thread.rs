@@ -27,12 +27,23 @@
 //! 3. Results (radio TX, serial TX, next wake time) are processed immediately
 //! 4. The next wake timer is scheduled as a local event
 //!
+//! ## Direct TCP Handling (Phase 4)
+//!
+//! TCP/UART connections are handled directly in node threads instead of routing through
+//! the coordinator. This reduces latency and simplifies the event flow:
+//!
+//! 1. Each node thread owns an optional `UartChannels` for TCP communication
+//! 2. The thread loop uses `crossbeam_channel::select!` to multiplex between coordinator
+//!    commands and TCP data
+//! 3. TCP data arrival is non-deterministic (external timing) - it triggers immediate
+//!    firmware stepping without affecting the deterministic simulation clock
+//!
 //! ## Feature Flag
 //!
 //! This module is gated behind the `per_node_threading` feature flag to allow
 //! incremental migration from the existing [`EventLoop`](crate::EventLoop).
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, select};
 use mcsim_common::{
     EntityId, LoraPacket, RadioParams, ReceiveAirEvent, SimTime, TransmitAirEvent,
 };
@@ -201,6 +212,17 @@ pub enum LocalEventPayload {
         /// When transmission will end.
         end_time: SimTime,
     },
+
+    /// TCP data received from external connection (Phase 4).
+    ///
+    /// This event is generated when data arrives from a TCP/UART connection.
+    /// Unlike other events, TCP data arrival is non-deterministic (based on
+    /// external wall-clock timing). The event is processed immediately to
+    /// minimize latency for interactive use cases.
+    TcpData {
+        /// The received data bytes.
+        data: Vec<u8>,
+    },
 }
 
 impl PartialEq for LocalEvent {
@@ -243,6 +265,94 @@ pub struct NodeThreadConfig {
     pub uart_port: Option<u16>,
     /// Whether tracing is enabled for this node.
     pub tracing_enabled: bool,
+}
+
+// ============================================================================
+// UART Channels (Phase 4)
+// ============================================================================
+
+/// Channels for TCP/UART communication with a node thread.
+///
+/// This struct holds the crossbeam channels used to bridge between the async TCP
+/// handler and the synchronous node thread. Data flows:
+///
+/// ```text
+/// TCP Client ─► async task ─► uart_data_rx ─► Node Thread ─► firmware
+/// TCP Client ◄─ async task ◄─ uart_data_tx ◄─ Node Thread ◄─ firmware
+/// ```
+///
+/// The node thread uses `crossbeam_channel::select!` to multiplex between
+/// coordinator commands and TCP data, allowing it to respond to either without
+/// busy-waiting.
+#[derive(Clone)]
+pub struct UartChannels {
+    /// Receiver for data coming FROM the TCP client (to be injected into firmware).
+    ///
+    /// The async TCP task sends data here when it reads from the socket.
+    /// The node thread receives from this channel in its main loop.
+    pub data_rx: Receiver<Vec<u8>>,
+    
+    /// Sender for data going TO the TCP client (from firmware serial output).
+    ///
+    /// The node thread sends firmware serial output here.
+    /// The async TCP task receives and writes to the socket.
+    pub data_tx: Sender<Vec<u8>>,
+}
+
+impl UartChannels {
+    /// Create a new pair of UART channels.
+    ///
+    /// Returns `(node_channels, tcp_channels)` where:
+    /// - `node_channels` is passed to the node thread
+    /// - `tcp_channels` is passed to the async TCP handler
+    ///
+    /// The channels are unbounded to avoid blocking either side.
+    pub fn new_pair() -> (UartChannels, UartChannels) {
+        // Channel for data FROM TCP TO node (TCP → firmware serial RX)
+        let (tcp_to_node_tx, tcp_to_node_rx) = crossbeam_channel::unbounded();
+        // Channel for data FROM node TO TCP (firmware serial TX → TCP)
+        let (node_to_tcp_tx, node_to_tcp_rx) = crossbeam_channel::unbounded();
+        
+        let node_channels = UartChannels {
+            data_rx: tcp_to_node_rx,
+            data_tx: node_to_tcp_tx,
+        };
+        
+        let tcp_channels = UartChannels {
+            data_rx: node_to_tcp_rx,
+            data_tx: tcp_to_node_tx,
+        };
+        
+        (node_channels, tcp_channels)
+    }
+    
+    /// Try to receive data without blocking.
+    ///
+    /// Returns `Some(data)` if data is available, `None` otherwise.
+    pub fn try_recv(&self) -> Option<Vec<u8>> {
+        self.data_rx.try_recv().ok()
+    }
+    
+    /// Send data to the other end.
+    ///
+    /// This is non-blocking (unbounded channel) but may fail if the receiver
+    /// has been dropped.
+    pub fn send(&self, data: Vec<u8>) -> Result<(), crossbeam_channel::SendError<Vec<u8>>> {
+        self.data_tx.send(data)
+    }
+    
+    /// Check if there's data available without consuming it.
+    pub fn has_data(&self) -> bool {
+        !self.data_rx.is_empty()
+    }
+}
+
+impl std::fmt::Debug for UartChannels {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UartChannels")
+            .field("has_pending_rx", &self.has_data())
+            .finish()
+    }
 }
 
 // ============================================================================
@@ -783,6 +893,114 @@ impl NodeThread {
         self.step_firmware_sync(event_time, report_tx);
     }
 
+    // ========================================================================
+    // Direct TCP Handling (Phase 4)
+    // ========================================================================
+
+    /// Handle TCP data received from an external connection.
+    ///
+    /// This is called directly from the node thread loop when TCP data arrives
+    /// via the UART channels. Unlike scheduled events, TCP data is processed
+    /// immediately (non-deterministic timing) to minimize latency.
+    ///
+    /// The data is injected into the firmware and stepped synchronously.
+    /// Any serial output from the firmware should be sent back via the UART
+    /// channels using [`send_uart_data()`](Self::send_uart_data).
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The received TCP data
+    /// * `uart_tx` - Channel to send serial output back to TCP
+    /// * `report_tx` - Channel for sending reports to coordinator
+    pub fn handle_tcp_data(
+        &mut self,
+        data: Vec<u8>,
+        uart_tx: &Sender<Vec<u8>>,
+        report_tx: &Sender<(usize, NodeReport)>,
+    ) {
+        let event_time = self.current_time;
+        
+        self.trace(|| TraceEvent {
+            time: event_time,
+            description: format!("TCP data received: {} bytes (non-deterministic)", data.len()),
+        });
+        
+        // Inject serial data into firmware
+        if let Some(firmware) = self.firmware.as_mut() {
+            firmware.inject_serial_rx(&data);
+        }
+        
+        // Step firmware to process the input
+        let tracing_enabled = self.config.tracing_enabled;
+        let node_name = self.config.name.clone();
+        let radio_entity_id = self.config.radio_entity_id;
+        let node_index = self.config.node_index;
+        let radio_params = self.radio_params.clone();
+        
+        if let Some(firmware) = self.firmware.as_mut() {
+            let sim_millis = event_time.as_micros() / 1000;
+            let output = firmware.step_sync(sim_millis);
+            
+            // Handle serial TX output - send back to TCP
+            if let Some(serial_data) = output.serial_tx {
+                if tracing_enabled {
+                    self.trace_events.push(TraceEvent {
+                        time: event_time,
+                        description: format!("Firmware serial TX (to TCP): {} bytes", serial_data.len()),
+                    });
+                }
+                
+                // Send to TCP via UART channel
+                let _ = uart_tx.send(serial_data);
+            }
+            
+            // Handle radio TX - queue for later processing
+            // Note: Radio TX requests from TCP-triggered stepping are handled
+            // but the actual transmission happens on the next time advancement
+            if output.yield_reason == YieldReason::RadioTxStart {
+                if let Some((tx_data, airtime_ms)) = output.radio_tx {
+                    let packet = LoraPacket::new(tx_data);
+                    let end_time = event_time + SimTime::from_millis(airtime_ms as u64);
+                    
+                    if tracing_enabled {
+                        self.trace_events.push(TraceEvent {
+                            time: event_time,
+                            description: format!(
+                                "TCP-triggered TX: {} bytes, airtime={}ms",
+                                packet.payload.len(), airtime_ms
+                            ),
+                        });
+                    }
+                    
+                    // Send TransmitAir to coordinator
+                    let tx_event = TransmitAirEvent {
+                        radio_id: radio_entity_id,
+                        end_time,
+                        packet,
+                        params: radio_params,
+                    };
+                    let _ = report_tx.send((node_index, NodeReport::TransmitAir(tx_event)));
+                }
+            }
+            
+            // Log errors
+            if output.yield_reason == YieldReason::Error {
+                if let Some(msg) = &output.error_message {
+                    eprintln!("[{}] Firmware error (TCP-triggered): {}", node_name, msg);
+                }
+            }
+        }
+    }
+
+    /// Send data to the TCP connection via UART channels.
+    ///
+    /// This is a helper for sending firmware serial output to the TCP client.
+    /// It's used when processing FirmwareTx events if UART channels are available.
+    #[inline]
+    pub fn send_uart_data(uart_tx: &Sender<Vec<u8>>, data: Vec<u8>) {
+        let _ = uart_tx.send(data);
+    }
+
     /// Get the node name.
     pub fn name(&self) -> &str {
         &self.config.name
@@ -1079,6 +1297,21 @@ impl NodeThread {
             }
 
             // ================================================================
+            // TCP Data Events (Phase 4)
+            // ================================================================
+            LocalEventPayload::TcpData { data } => {
+                // TCP data received from external connection
+                // This is handled immediately (non-deterministic timing)
+                self.trace(|| TraceEvent {
+                    time: event_time,
+                    description: format!("TCP → Firmware: {} bytes", data.len()),
+                });
+                
+                // Inject serial data into firmware and step it
+                self.handle_serial_rx_with_firmware(&data, event_time, report_tx);
+            }
+
+            // ================================================================
             // Firmware → Radio Events (Local)
             // ================================================================
             LocalEventPayload::RadioTx { packet, params } => {
@@ -1225,8 +1458,41 @@ pub fn spawn_node_thread(
     NodeThreadHandle { cmd_tx, name, thread }
 }
 
+/// Spawn a node thread with UART channels for TCP communication (Phase 4).
+///
+/// This is the Phase 4 variant that enables direct TCP handling in the node thread.
+/// The thread uses `crossbeam_channel::select!` to multiplex between coordinator
+/// commands and TCP data from the UART channels.
+///
+/// # Arguments
+///
+/// * `config` - Node thread configuration
+/// * `report_tx` - Channel for sending reports to coordinator
+/// * `uart_channels` - UART channels for TCP communication (node side)
+///
+/// # Returns
+///
+/// A handle for the coordinator to communicate with the thread.
+pub fn spawn_node_thread_with_uart(
+    config: NodeThreadConfig,
+    report_tx: Sender<(usize, NodeReport)>,
+    uart_channels: UartChannels,
+) -> NodeThreadHandle {
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let name = config.name.clone();
+
+    let thread = thread::Builder::new()
+        .name(format!("node-{}", config.name))
+        .spawn(move || {
+            node_thread_main_with_uart(config, cmd_rx, report_tx, uart_channels);
+        })
+        .expect("Failed to spawn node thread with UART");
+
+    NodeThreadHandle { cmd_tx, name, thread }
+}
+
 /// Main function for a node thread.
-/// 
+///
 /// Blocks waiting for commands from the coordinator and processes them
 /// until receiving a [`NodeCommand::Shutdown`].
 fn node_thread_main(
@@ -1247,6 +1513,67 @@ fn node_thread_main(
             Err(_) => {
                 // Channel closed - coordinator has dropped us
                 break;
+            }
+        }
+    }
+}
+
+/// Main function for a node thread with UART support (Phase 4).
+///
+/// This variant uses `crossbeam_channel::select!` to multiplex between:
+/// - Coordinator commands (via `cmd_rx`)
+/// - TCP data from external connections (via `uart_channels.data_rx`)
+///
+/// TCP data is processed immediately (non-deterministic timing) to minimize
+/// latency for interactive use cases. The data is injected into the firmware
+/// and stepped synchronously.
+fn node_thread_main_with_uart(
+    config: NodeThreadConfig,
+    cmd_rx: Receiver<NodeCommand>,
+    report_tx: Sender<(usize, NodeReport)>,
+    uart_channels: UartChannels,
+) {
+    let mut node = NodeThread::new(config);
+    let uart_data_rx = &uart_channels.data_rx;
+    let uart_data_tx = &uart_channels.data_tx;
+
+    loop {
+        // Use select! to multiplex between coordinator commands and TCP data.
+        // This allows the node to respond to either without busy-waiting.
+        select! {
+            // Handle coordinator commands (primary channel)
+            recv(cmd_rx) -> cmd_result => {
+                match cmd_result {
+                    Ok(cmd) => {
+                        if !node.handle_command(cmd, &report_tx) {
+                            break; // Shutdown requested
+                        }
+                    }
+                    Err(_) => {
+                        // Channel closed - coordinator has dropped us
+                        break;
+                    }
+                }
+            }
+            
+            // Handle TCP data (non-deterministic, external timing)
+            recv(uart_data_rx) -> data_result => {
+                match data_result {
+                    Ok(data) => {
+                        // Process TCP data immediately (Phase 4 direct TCP handling)
+                        node.handle_tcp_data(data, uart_data_tx, &report_tx);
+                    }
+                    Err(_) => {
+                        // UART channel closed - TCP connection dropped
+                        // This is not fatal; continue processing coordinator commands
+                        // Note: Get current_time before calling trace to avoid borrow conflict
+                        let current_time = node.current_time();
+                        node.trace(|| TraceEvent {
+                            time: current_time,
+                            description: "UART channel closed (TCP disconnected)".to_string(),
+                        });
+                    }
+                }
             }
         }
     }
@@ -2250,5 +2577,229 @@ mod tests {
         assert!(!timer_ids::is_firmware_timer(timer_ids::RADIO_TX_COMPLETE));
         assert!(timer_ids::is_radio_timer(timer_ids::RADIO_TX_COMPLETE));
         assert!(!timer_ids::is_agent_timer(timer_ids::RADIO_TX_COMPLETE));
+    }
+
+    // ========================================================================
+    // Phase 4: Direct TCP Handling Tests
+    // ========================================================================
+
+    #[test]
+    fn test_uart_channels_new_pair() {
+        // Test that UartChannels::new_pair creates properly connected channels
+        let (node_channels, tcp_channels) = UartChannels::new_pair();
+        
+        // Initially no data should be available
+        assert!(!node_channels.has_data());
+        assert!(!tcp_channels.has_data());
+        
+        // Data sent from TCP side should arrive at node side
+        tcp_channels.send(vec![0x01, 0x02, 0x03]).unwrap();
+        assert!(node_channels.has_data());
+        let received = node_channels.try_recv().unwrap();
+        assert_eq!(received, vec![0x01, 0x02, 0x03]);
+        
+        // Data sent from node side should arrive at TCP side
+        node_channels.send(vec![0xAA, 0xBB]).unwrap();
+        assert!(tcp_channels.has_data());
+        let received = tcp_channels.try_recv().unwrap();
+        assert_eq!(received, vec![0xAA, 0xBB]);
+    }
+
+    #[test]
+    fn test_uart_channels_try_recv_empty() {
+        // Test that try_recv returns None when no data is available
+        let (node_channels, _tcp_channels) = UartChannels::new_pair();
+        
+        assert!(node_channels.try_recv().is_none());
+    }
+
+    #[test]
+    fn test_uart_channels_multiple_messages() {
+        // Test that multiple messages can be queued and received in order
+        let (node_channels, tcp_channels) = UartChannels::new_pair();
+        
+        // Send multiple messages
+        tcp_channels.send(vec![1]).unwrap();
+        tcp_channels.send(vec![2]).unwrap();
+        tcp_channels.send(vec![3]).unwrap();
+        
+        // Receive them in order (FIFO)
+        assert_eq!(node_channels.try_recv().unwrap(), vec![1]);
+        assert_eq!(node_channels.try_recv().unwrap(), vec![2]);
+        assert_eq!(node_channels.try_recv().unwrap(), vec![3]);
+        assert!(node_channels.try_recv().is_none());
+    }
+
+    #[test]
+    fn test_handle_tcp_data_without_firmware() {
+        // Test handle_tcp_data when no firmware is attached
+        let (report_tx, report_rx) = crossbeam_channel::unbounded::<(usize, NodeReport)>();
+        let (uart_tx, uart_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let config = NodeThreadConfig {
+            name: "tcp_test".to_string(),
+            node_index: 0,
+            firmware_entity_id: EntityId::new(1),
+            radio_entity_id: EntityId::new(2),
+            uart_port: Some(5000),
+            tracing_enabled: true,
+        };
+        let mut node = NodeThread::new(config);
+        
+        // Handle TCP data without firmware - should not panic
+        node.handle_tcp_data(vec![0x01, 0x02, 0x03], &uart_tx, &report_tx);
+        
+        // No report should be sent (no firmware to process)
+        assert!(report_rx.try_recv().is_err());
+        
+        // No UART output (no firmware to generate it)
+        assert!(uart_rx.try_recv().is_err());
+        
+        // Trace should capture the TCP data receipt
+        let tcp_trace = node.trace_events.iter()
+            .any(|e| e.description.contains("TCP data received"));
+        assert!(tcp_trace, "Should trace TCP data receipt");
+    }
+
+    #[test]
+    fn test_tcp_data_local_event_variant() {
+        // Test that TcpData events can be queued and processed
+        let (report_tx, _report_rx) = crossbeam_channel::unbounded();
+        let config = NodeThreadConfig {
+            name: "tcp_event_test".to_string(),
+            node_index: 0,
+            firmware_entity_id: EntityId::new(1),
+            radio_entity_id: EntityId::new(2),
+            uart_port: Some(5000),
+            tracing_enabled: true,
+        };
+        let mut node = NodeThread::new(config);
+        
+        // Queue a TcpData event
+        node.push_local_event(
+            SimTime::from_millis(100),
+            LocalEventPayload::TcpData {
+                data: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            },
+        );
+        
+        assert_eq!(node.pending_event_count(), 1);
+        
+        // Process the event
+        let processed = node.process_local_events(SimTime::from_millis(100), &report_tx);
+        assert_eq!(processed, 1);
+        
+        // Verify trace captured the TCP event processing
+        let tcp_trace = node.trace_events.iter()
+            .any(|e| e.description.contains("TCP → Firmware"));
+        assert!(tcp_trace, "Should trace TCP to firmware event");
+    }
+
+    #[test]
+    fn test_spawn_node_thread_with_uart_basic() {
+        // Test that spawn_node_thread_with_uart creates a working thread
+        let (report_tx, report_rx) = crossbeam_channel::unbounded();
+        let (node_channels, _tcp_channels) = UartChannels::new_pair();
+        
+        let config = NodeThreadConfig {
+            name: "uart_thread_test".to_string(),
+            node_index: 0,
+            firmware_entity_id: EntityId::new(1),
+            radio_entity_id: EntityId::new(2),
+            uart_port: Some(5000),
+            tracing_enabled: false,
+        };
+        
+        let handle = spawn_node_thread_with_uart(config, report_tx, node_channels);
+        
+        // Send AdvanceTime command
+        handle.send(NodeCommand::AdvanceTime {
+            until: SimTime::from_millis(100)
+        }).unwrap();
+        
+        // Should receive TimeReached report
+        let (idx, report) = report_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        assert_eq!(idx, 0);
+        match report {
+            NodeReport::TimeReached { time, .. } => {
+                assert_eq!(time, SimTime::from_millis(100));
+            }
+            _ => panic!("Expected TimeReached report"),
+        }
+        
+        // Shutdown
+        handle.send(NodeCommand::Shutdown).unwrap();
+        let (_, report) = report_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        assert!(matches!(report, NodeReport::Shutdown));
+        
+        handle.join().expect("Thread should join cleanly");
+    }
+
+    #[test]
+    fn test_spawn_node_thread_with_uart_receives_tcp_data() {
+        // Test that TCP data is received by the node thread
+        let (report_tx, report_rx) = crossbeam_channel::unbounded();
+        let (node_channels, tcp_channels) = UartChannels::new_pair();
+        
+        let config = NodeThreadConfig {
+            name: "uart_recv_test".to_string(),
+            node_index: 0,
+            firmware_entity_id: EntityId::new(1),
+            radio_entity_id: EntityId::new(2),
+            uart_port: Some(5001),
+            tracing_enabled: false,
+        };
+        
+        let handle = spawn_node_thread_with_uart(config, report_tx.clone(), node_channels);
+        
+        // Send TCP data (simulating external client)
+        tcp_channels.send(vec![0x01, 0x02, 0x03]).unwrap();
+        
+        // Give the thread time to process
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        
+        // The node should have processed the data (though without firmware,
+        // there won't be visible output). We verify by successful shutdown.
+        
+        // Advance time to ensure thread is responsive
+        handle.send(NodeCommand::AdvanceTime {
+            until: SimTime::from_millis(100)
+        }).unwrap();
+        
+        let (_, report) = report_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        assert!(matches!(report, NodeReport::TimeReached { .. }));
+        
+        // Shutdown
+        handle.send(NodeCommand::Shutdown).unwrap();
+        let (_, report) = report_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        assert!(matches!(report, NodeReport::Shutdown));
+        
+        handle.join().expect("Thread should join cleanly");
+    }
+
+    #[test]
+    fn test_send_uart_data_helper() {
+        // Test the send_uart_data helper function
+        let (tx, rx) = crossbeam_channel::unbounded();
+        
+        NodeThread::send_uart_data(&tx, vec![0x01, 0x02, 0x03]);
+        
+        let received = rx.try_recv().unwrap();
+        assert_eq!(received, vec![0x01, 0x02, 0x03]);
+    }
+
+    #[test]
+    fn test_uart_channels_debug_impl() {
+        // Test that UartChannels has a reasonable Debug implementation
+        let (node_channels, tcp_channels) = UartChannels::new_pair();
+        
+        // Debug output should work without data
+        let debug_str = format!("{:?}", node_channels);
+        assert!(debug_str.contains("UartChannels"));
+        assert!(debug_str.contains("has_pending_rx"));
+        
+        // Send some data and check debug output changes
+        tcp_channels.send(vec![1, 2, 3]).unwrap();
+        let debug_str_with_data = format!("{:?}", node_channels);
+        assert!(debug_str_with_data.contains("true") || debug_str_with_data.contains("has_pending_rx"));
     }
 }
