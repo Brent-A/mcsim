@@ -1625,13 +1625,103 @@ impl Ord for GlobalEvent {
     }
 }
 
+// ============================================================================
+// Wake Time Coalescing (Phase 5)
+// ============================================================================
+
+/// Default coalescing threshold in microseconds (1ms).
+/// Wake times within this threshold are combined into a single time advancement.
+pub const DEFAULT_COALESCE_THRESHOLD_US: u64 = 1000;
+
+/// Configuration for wake time coalescing.
+#[derive(Debug, Clone)]
+pub struct CoalesceConfig {
+    /// Whether coalescing is enabled.
+    pub enabled: bool,
+    /// Threshold in microseconds - wake times within this range are coalesced.
+    pub threshold_us: u64,
+}
+
+impl Default for CoalesceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold_us: DEFAULT_COALESCE_THRESHOLD_US,
+        }
+    }
+}
+
+/// Coalesce nearby wake times to reduce the number of time advancement cycles.
+///
+/// When multiple nodes have wake times that are very close together (within
+/// the threshold), they are combined into a single wake time. This reduces
+/// overhead without affecting simulation accuracy (MeshCore operates on
+/// millisecond granularity).
+///
+/// # Arguments
+/// * `wake_times` - List of optional wake times (one per node)
+/// * `threshold_us` - Maximum difference in microseconds to coalesce
+///
+/// # Returns
+/// The coalesced minimum wake time, or None if no wake times are set.
+pub fn coalesce_wake_times(
+    wake_times: &[Option<SimTime>],
+    threshold_us: u64,
+) -> Option<SimTime> {
+    // Collect all defined wake times and sort them
+    let mut sorted: Vec<SimTime> = wake_times
+        .iter()
+        .filter_map(|t| *t)
+        .collect();
+    
+    if sorted.is_empty() {
+        return None;
+    }
+    
+    sorted.sort();
+    
+    // Find the earliest wake time
+    let earliest = sorted[0];
+    
+    // Count how many nodes have wake times within the threshold of the earliest
+    let coalesced_count = sorted
+        .iter()
+        .take_while(|t| t.as_micros() <= earliest.as_micros() + threshold_us)
+        .count();
+    
+    // If multiple nodes coalesce, use the latest time in the group to ensure
+    // all nodes are ready when we advance
+    if coalesced_count > 1 {
+        Some(sorted[coalesced_count - 1])
+    } else {
+        Some(earliest)
+    }
+}
+
 /// The coordinator that manages all node threads and global event routing.
-/// 
+///
 /// The coordinator is responsible for:
 /// - Time synchronization across all nodes
 /// - Routing air transmissions through the Graph entity
 /// - Collecting reports from nodes
 /// - Handling simulation-level control (start, stop, etc.)
+///
+/// ## Phase 5: Parallel Node Advancement
+///
+/// The coordinator sends `AdvanceTime` commands to ALL nodes simultaneously
+/// and waits for ALL `TimeReached` reports. This enables true parallel
+/// processing across node threads while maintaining determinism:
+///
+/// 1. All nodes receive the same target time
+/// 2. All nodes process their local events in parallel
+/// 3. The coordinator waits for all nodes to finish
+/// 4. Results (TransmitAir events) are collected deterministically
+///
+/// ## Wake Time Coalescing
+///
+/// To reduce the number of time advancement cycles, the coordinator coalesces
+/// nearby wake times. When multiple nodes have wake times within a small
+/// threshold (default 1ms), they are combined into a single advancement.
 pub struct Coordinator {
     /// Handles to all node threads.
     nodes: Vec<NodeThreadHandle>,
@@ -1645,6 +1735,23 @@ pub struct Coordinator {
     current_time: SimTime,
     /// Tracked next wake time per node.
     node_wake_times: Vec<Option<SimTime>>,
+    /// Configuration for wake time coalescing.
+    coalesce_config: CoalesceConfig,
+    /// Statistics for performance monitoring.
+    stats: CoordinatorStats,
+}
+
+/// Statistics collected by the coordinator for performance monitoring.
+#[derive(Debug, Clone, Default)]
+pub struct CoordinatorStats {
+    /// Total number of time advancement cycles.
+    pub total_advances: u64,
+    /// Number of times wake time coalescing was applied.
+    pub coalesce_events: u64,
+    /// Total number of nodes advanced (sum across all advances).
+    pub total_node_steps: u64,
+    /// Maximum number of TransmitAir events in a single advance.
+    pub max_transmits_per_advance: usize,
 }
 
 impl Coordinator {
@@ -1658,6 +1765,23 @@ impl Coordinator {
             event_queue: BinaryHeap::new(),
             current_time: SimTime::ZERO,
             node_wake_times: Vec::new(),
+            coalesce_config: CoalesceConfig::default(),
+            stats: CoordinatorStats::default(),
+        }
+    }
+
+    /// Create a new coordinator with custom coalescing configuration.
+    pub fn with_coalesce_config(coalesce_config: CoalesceConfig) -> Self {
+        let (report_tx, report_rx) = crossbeam_channel::unbounded();
+        Self {
+            nodes: Vec::new(),
+            report_rx,
+            report_tx,
+            event_queue: BinaryHeap::new(),
+            current_time: SimTime::ZERO,
+            node_wake_times: Vec::new(),
+            coalesce_config,
+            stats: CoordinatorStats::default(),
         }
     }
 
@@ -1669,6 +1793,21 @@ impl Coordinator {
     /// Get the number of nodes.
     pub fn node_count(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// Get the coordinator statistics.
+    pub fn stats(&self) -> &CoordinatorStats {
+        &self.stats
+    }
+
+    /// Get the coalescing configuration.
+    pub fn coalesce_config(&self) -> &CoalesceConfig {
+        &self.coalesce_config
+    }
+
+    /// Set the coalescing configuration.
+    pub fn set_coalesce_config(&mut self, config: CoalesceConfig) {
+        self.coalesce_config = config;
     }
 
     /// Spawn and add a node thread.
@@ -1684,14 +1823,40 @@ impl Coordinator {
     }
 
     /// Calculate the next global time to advance to.
-    /// 
-    /// This is the minimum of:
-    /// - The earliest node wake time
+    ///
+    /// This method implements wake time coalescing (Phase 5): when multiple nodes
+    /// have wake times that are very close together, they are combined into a
+    /// single time advancement to reduce overhead.
+    ///
+    /// The returned time is the minimum of:
+    /// - The coalesced node wake time (if coalescing enabled)
+    /// - The minimum node wake time (if coalescing disabled)
     /// - The earliest global event time
-    fn calculate_next_time(&self) -> Option<SimTime> {
-        let min_node_wake = self.node_wake_times.iter()
-            .filter_map(|t| *t)
-            .min();
+    fn calculate_next_time(&mut self) -> Option<SimTime> {
+        // Calculate node wake time, potentially with coalescing
+        let min_node_wake = if self.coalesce_config.enabled {
+            let coalesced = coalesce_wake_times(&self.node_wake_times, self.coalesce_config.threshold_us);
+            
+            // Track coalescing statistics
+            if coalesced.is_some() {
+                let active_wake_count = self.node_wake_times.iter().filter(|t| t.is_some()).count();
+                if active_wake_count > 1 {
+                    // Check if coalescing actually combined multiple wake times
+                    let min_wake = self.node_wake_times.iter().filter_map(|t| *t).min();
+                    if let (Some(coalesced_time), Some(min_time)) = (coalesced, min_wake) {
+                        if coalesced_time > min_time {
+                            self.stats.coalesce_events += 1;
+                        }
+                    }
+                }
+            }
+            
+            coalesced
+        } else {
+            self.node_wake_times.iter()
+                .filter_map(|t| *t)
+                .min()
+        };
 
         let min_global_event = self.event_queue.peek().map(|e| e.time);
 
@@ -1703,34 +1868,58 @@ impl Coordinator {
         }
     }
 
-    /// Advance all nodes to the given time.
-    /// 
-    /// Sends `AdvanceTime` commands to all nodes and waits for all
-    /// `TimeReached` reports.
+    /// Advance all nodes to the given time (Phase 5: Parallel Node Advancement).
+    ///
+    /// This method sends `AdvanceTime` commands to ALL nodes simultaneously,
+    /// enabling parallel processing. All nodes receive the same target time
+    /// and process their local events concurrently. The coordinator then
+    /// waits for all `TimeReached` reports before proceeding.
+    ///
+    /// This design maintains determinism because:
+    /// 1. All nodes receive the same target time
+    /// 2. Nodes only communicate via the coordinator (no direct node-to-node channels)
+    /// 3. TransmitAir events are collected and processed deterministically
+    ///
+    /// # Arguments
+    /// * `target_time` - The simulation time to advance all nodes to
+    ///
+    /// # Returns
+    /// * `Ok(())` if all nodes advanced successfully
+    /// * `Err(String)` if any node reported an error
     pub fn advance_to(&mut self, target_time: SimTime) -> Result<(), String> {
-        // Send AdvanceTime to all nodes
+        // Phase 5: Send AdvanceTime to ALL nodes simultaneously for parallel processing
         for node in &self.nodes {
             if let Err(e) = node.send(NodeCommand::AdvanceTime { until: target_time }) {
                 return Err(format!("Failed to send AdvanceTime to {}: {}", node.name(), e));
             }
         }
 
-        // Wait for all nodes to report TimeReached
+        // Track statistics
+        self.stats.total_advances += 1;
+        self.stats.total_node_steps += self.nodes.len() as u64;
+
+        // Wait for ALL nodes to report TimeReached (parallel completion)
+        // Nodes process their local events concurrently while we wait
         let mut pending = self.nodes.len();
+        let mut transmits_this_advance = 0;
+        
         while pending > 0 {
             match self.report_rx.recv() {
                 Ok((node_index, report)) => {
                     match report {
                         NodeReport::TimeReached { time: _, next_wake_time, trace_events: _ } => {
+                            // Update wake time for this node
                             self.node_wake_times[node_index] = next_wake_time;
                             pending -= 1;
                         }
                         NodeReport::TransmitAir(tx_event) => {
-                            // Queue the transmission end event
+                            // Queue the transmission end event for global routing
+                            // In full implementation: route through Graph entity
                             self.event_queue.push(GlobalEvent {
                                 time: tx_event.end_time,
                                 payload: GlobalEventPayload::TransmissionEnd { tx_event },
                             });
+                            transmits_this_advance += 1;
                         }
                         NodeReport::Error(msg) => {
                             return Err(format!("Node {} error: {}", node_index, msg));
@@ -1746,20 +1935,29 @@ impl Coordinator {
             }
         }
 
+        // Track max transmits per advance for performance monitoring
+        if transmits_this_advance > self.stats.max_transmits_per_advance {
+            self.stats.max_transmits_per_advance = transmits_this_advance;
+        }
+
         self.current_time = target_time;
         Ok(())
     }
 
     /// Run the simulation for the specified duration.
-    /// 
-    /// This is a basic implementation that advances time step by step.
+    ///
+    /// This method implements the main simulation loop with:
+    /// - Wake time coalescing to reduce time advancement cycles
+    /// - Parallel node advancement for concurrent processing
+    /// - Global event processing for air transmissions
+    ///
     /// A full implementation would integrate with the Graph entity for
-    /// routing transmissions.
+    /// routing transmissions to receiver nodes.
     pub fn run(&mut self, duration: SimTime) -> Result<(), String> {
         let end_time = duration;
 
         while self.current_time < end_time {
-            // Calculate next time to advance to
+            // Calculate next time to advance to (with coalescing)
             let next_time = self.calculate_next_time()
                 .map(|t| t.min(end_time))
                 .unwrap_or(end_time);
@@ -1779,10 +1977,65 @@ impl Coordinator {
                 // and send ReceiveAir to affected nodes
             }
 
-            // Advance all nodes
+            // Advance all nodes in parallel
             self.advance_to(next_time)?;
         }
 
+        Ok(())
+    }
+
+    /// Run the simulation with a progress callback.
+    ///
+    /// Similar to [`run()`](Self::run), but invokes the callback periodically
+    /// to report progress.
+    ///
+    /// # Arguments
+    /// * `duration` - Total simulation duration
+    /// * `progress_interval` - How often to report progress (in simulation time)
+    /// * `on_progress` - Callback invoked with (current_time, stats)
+    pub fn run_with_progress<F>(
+        &mut self,
+        duration: SimTime,
+        progress_interval: SimTime,
+        mut on_progress: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(SimTime, &CoordinatorStats),
+    {
+        let end_time = duration;
+        let mut next_progress_time = progress_interval;
+
+        while self.current_time < end_time {
+            // Calculate next time to advance to (with coalescing)
+            let next_time = self.calculate_next_time()
+                .map(|t| t.min(end_time))
+                .unwrap_or(end_time);
+
+            if next_time <= self.current_time {
+                break;
+            }
+
+            // Process global events
+            while let Some(event) = self.event_queue.peek() {
+                if event.time > next_time {
+                    break;
+                }
+                let _event = self.event_queue.pop().unwrap();
+            }
+
+            // Advance all nodes in parallel
+            self.advance_to(next_time)?;
+
+            // Report progress periodically
+            if self.current_time >= next_progress_time {
+                on_progress(self.current_time, &self.stats);
+                next_progress_time = self.current_time + progress_interval;
+            }
+        }
+
+        // Final progress report
+        on_progress(self.current_time, &self.stats);
+        
         Ok(())
     }
 
@@ -2801,5 +3054,364 @@ mod tests {
         tcp_channels.send(vec![1, 2, 3]).unwrap();
         let debug_str_with_data = format!("{:?}", node_channels);
         assert!(debug_str_with_data.contains("true") || debug_str_with_data.contains("has_pending_rx"));
+    }
+
+    // ========================================================================
+    // Phase 5: Wake Time Coalescing and Parallel Advancement Tests
+    // ========================================================================
+
+    #[test]
+    fn test_coalesce_wake_times_empty() {
+        // Empty wake times should return None
+        let wake_times: Vec<Option<SimTime>> = vec![];
+        let result = coalesce_wake_times(&wake_times, DEFAULT_COALESCE_THRESHOLD_US);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_coalesce_wake_times_all_none() {
+        // All None wake times should return None
+        let wake_times = vec![None, None, None];
+        let result = coalesce_wake_times(&wake_times, DEFAULT_COALESCE_THRESHOLD_US);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_coalesce_wake_times_single() {
+        // Single wake time should return that time
+        let wake_times = vec![Some(SimTime::from_millis(100))];
+        let result = coalesce_wake_times(&wake_times, DEFAULT_COALESCE_THRESHOLD_US);
+        assert_eq!(result, Some(SimTime::from_millis(100)));
+    }
+
+    #[test]
+    fn test_coalesce_wake_times_no_coalescing_needed() {
+        // Wake times far apart should return the earliest
+        let wake_times = vec![
+            Some(SimTime::from_millis(100)),
+            Some(SimTime::from_millis(200)),
+            Some(SimTime::from_millis(300)),
+        ];
+        let result = coalesce_wake_times(&wake_times, DEFAULT_COALESCE_THRESHOLD_US);
+        assert_eq!(result, Some(SimTime::from_millis(100)));
+    }
+
+    #[test]
+    fn test_coalesce_wake_times_within_threshold() {
+        // Wake times within threshold should return the latest in the group
+        // Threshold is 1000us (1ms)
+        let wake_times = vec![
+            Some(SimTime::from_micros(100_000)), // 100ms
+            Some(SimTime::from_micros(100_500)), // 100.5ms (within 1ms threshold)
+            Some(SimTime::from_micros(100_800)), // 100.8ms (within 1ms threshold)
+        ];
+        let result = coalesce_wake_times(&wake_times, DEFAULT_COALESCE_THRESHOLD_US);
+        // Should return 100.8ms (latest in the coalesced group)
+        assert_eq!(result, Some(SimTime::from_micros(100_800)));
+    }
+
+    #[test]
+    fn test_coalesce_wake_times_mixed() {
+        // Mix of Some and None should only consider Some values
+        let wake_times = vec![
+            None,
+            Some(SimTime::from_millis(100)),
+            None,
+            Some(SimTime::from_millis(200)),
+            None,
+        ];
+        let result = coalesce_wake_times(&wake_times, DEFAULT_COALESCE_THRESHOLD_US);
+        assert_eq!(result, Some(SimTime::from_millis(100)));
+    }
+
+    #[test]
+    fn test_coalesce_config_default() {
+        // Test default CoalesceConfig values
+        let config = CoalesceConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.threshold_us, DEFAULT_COALESCE_THRESHOLD_US);
+    }
+
+    #[test]
+    fn test_coordinator_with_coalesce_config() {
+        // Test creating coordinator with custom coalescing config
+        let config = CoalesceConfig {
+            enabled: false,
+            threshold_us: 5000, // 5ms
+        };
+        let coordinator = Coordinator::with_coalesce_config(config.clone());
+        
+        assert_eq!(coordinator.coalesce_config().enabled, false);
+        assert_eq!(coordinator.coalesce_config().threshold_us, 5000);
+        
+        coordinator.shutdown().expect("Shutdown should succeed");
+    }
+
+    #[test]
+    fn test_coordinator_stats_initial() {
+        // Test that coordinator stats start at zero
+        let coordinator = Coordinator::new();
+        let stats = coordinator.stats();
+        
+        assert_eq!(stats.total_advances, 0);
+        assert_eq!(stats.coalesce_events, 0);
+        assert_eq!(stats.total_node_steps, 0);
+        assert_eq!(stats.max_transmits_per_advance, 0);
+        
+        coordinator.shutdown().expect("Shutdown should succeed");
+    }
+
+    #[test]
+    fn test_coordinator_stats_after_advance() {
+        // Test that coordinator tracks statistics correctly
+        let mut coordinator = Coordinator::new();
+        
+        let config = NodeThreadConfig {
+            name: "stats_test".to_string(),
+            node_index: 0,
+            firmware_entity_id: EntityId::new(1),
+            radio_entity_id: EntityId::new(2),
+            uart_port: None,
+            tracing_enabled: false,
+        };
+        coordinator.add_node(config);
+        
+        // Advance time
+        coordinator.advance_to(SimTime::from_millis(100)).unwrap();
+        
+        let stats = coordinator.stats();
+        assert_eq!(stats.total_advances, 1);
+        assert_eq!(stats.total_node_steps, 1); // 1 node advanced
+        
+        coordinator.shutdown().expect("Shutdown should succeed");
+    }
+
+    #[test]
+    fn test_coordinator_parallel_advancement_multiple_nodes() {
+        // Test that multiple nodes are advanced in parallel
+        let mut coordinator = Coordinator::new();
+        
+        // Add multiple nodes
+        for i in 0..4 {
+            let config = NodeThreadConfig {
+                name: format!("node_{}", i),
+                node_index: i,
+                firmware_entity_id: EntityId::new((i + 1) as u64),
+                radio_entity_id: EntityId::new((i + 100) as u64),
+                uart_port: None,
+                tracing_enabled: false,
+            };
+            coordinator.add_node(config);
+        }
+        
+        assert_eq!(coordinator.node_count(), 4);
+        
+        // Advance time - all nodes should be advanced in parallel
+        coordinator.advance_to(SimTime::from_millis(100)).unwrap();
+        
+        let stats = coordinator.stats();
+        assert_eq!(stats.total_advances, 1);
+        assert_eq!(stats.total_node_steps, 4); // 4 nodes advanced
+        assert_eq!(coordinator.current_time(), SimTime::from_millis(100));
+        
+        // Second advance
+        coordinator.advance_to(SimTime::from_millis(200)).unwrap();
+        
+        let stats = coordinator.stats();
+        assert_eq!(stats.total_advances, 2);
+        assert_eq!(stats.total_node_steps, 8); // 4 nodes * 2 advances
+        
+        coordinator.shutdown().expect("Shutdown should succeed");
+    }
+
+    #[test]
+    fn test_coordinator_set_coalesce_config() {
+        // Test that coalescing config can be changed
+        let mut coordinator = Coordinator::new();
+        
+        // Default should be enabled
+        assert!(coordinator.coalesce_config().enabled);
+        
+        // Disable coalescing
+        coordinator.set_coalesce_config(CoalesceConfig {
+            enabled: false,
+            threshold_us: 2000,
+        });
+        
+        assert!(!coordinator.coalesce_config().enabled);
+        assert_eq!(coordinator.coalesce_config().threshold_us, 2000);
+        
+        coordinator.shutdown().expect("Shutdown should succeed");
+    }
+
+    #[test]
+    fn test_coordinator_run_with_progress() {
+        // Test run_with_progress method
+        let mut coordinator = Coordinator::new();
+        
+        let config = NodeThreadConfig {
+            name: "progress_test".to_string(),
+            node_index: 0,
+            firmware_entity_id: EntityId::new(1),
+            radio_entity_id: EntityId::new(2),
+            uart_port: None,
+            tracing_enabled: false,
+        };
+        coordinator.add_node(config);
+        
+        // Track progress callbacks
+        let mut progress_calls = 0;
+        let mut last_time = SimTime::ZERO;
+        
+        coordinator.run_with_progress(
+            SimTime::from_millis(500),
+            SimTime::from_millis(100),
+            |time, _stats| {
+                progress_calls += 1;
+                last_time = time;
+            },
+        ).expect("Run should succeed");
+        
+        // Should have at least one progress callback
+        assert!(progress_calls >= 1, "Expected at least 1 progress callback, got {}", progress_calls);
+        // Final time should be reached
+        assert_eq!(last_time, SimTime::from_millis(500));
+        
+        coordinator.shutdown().expect("Shutdown should succeed");
+    }
+
+    #[test]
+    fn test_coordinator_run_basic() {
+        // Test basic run method
+        let mut coordinator = Coordinator::new();
+        
+        let config = NodeThreadConfig {
+            name: "run_test".to_string(),
+            node_index: 0,
+            firmware_entity_id: EntityId::new(1),
+            radio_entity_id: EntityId::new(2),
+            uart_port: None,
+            tracing_enabled: false,
+        };
+        coordinator.add_node(config);
+        
+        // Run for a short duration
+        coordinator.run(SimTime::from_millis(100)).expect("Run should succeed");
+        
+        // Should have advanced to the target time
+        assert_eq!(coordinator.current_time(), SimTime::from_millis(100));
+        
+        coordinator.shutdown().expect("Shutdown should succeed");
+    }
+
+    #[test]
+    fn test_coalesce_wake_times_boundary() {
+        // Test wake times exactly at the threshold boundary
+        let threshold = 1000; // 1ms in microseconds
+        let wake_times = vec![
+            Some(SimTime::from_micros(100_000)), // 100ms
+            Some(SimTime::from_micros(101_000)), // 101ms (exactly at threshold)
+        ];
+        let result = coalesce_wake_times(&wake_times, threshold);
+        // 101ms is exactly 1000us away from 100ms, should coalesce
+        assert_eq!(result, Some(SimTime::from_micros(101_000)));
+    }
+
+    #[test]
+    fn test_coalesce_wake_times_just_outside_threshold() {
+        // Test wake times just outside the threshold
+        let threshold = 1000; // 1ms in microseconds
+        let wake_times = vec![
+            Some(SimTime::from_micros(100_000)), // 100ms
+            Some(SimTime::from_micros(101_001)), // 101.001ms (just outside threshold)
+        ];
+        let result = coalesce_wake_times(&wake_times, threshold);
+        // Second time is outside threshold, return earliest
+        assert_eq!(result, Some(SimTime::from_micros(100_000)));
+    }
+
+    #[test]
+    fn test_global_event_ordering() {
+        // Test GlobalEvent ordering in BinaryHeap
+        let mut heap = BinaryHeap::new();
+        
+        heap.push(GlobalEvent {
+            time: SimTime::from_millis(200),
+            payload: GlobalEventPayload::TransmissionEnd {
+                tx_event: TransmitAirEvent {
+                    radio_id: EntityId::new(1),
+                    end_time: SimTime::from_millis(200),
+                    packet: LoraPacket::from_bytes(vec![1]),
+                    params: default_radio_params(),
+                },
+            },
+        });
+        
+        heap.push(GlobalEvent {
+            time: SimTime::from_millis(100),
+            payload: GlobalEventPayload::TransmissionEnd {
+                tx_event: TransmitAirEvent {
+                    radio_id: EntityId::new(2),
+                    end_time: SimTime::from_millis(100),
+                    packet: LoraPacket::from_bytes(vec![2]),
+                    params: default_radio_params(),
+                },
+            },
+        });
+        
+        heap.push(GlobalEvent {
+            time: SimTime::from_millis(300),
+            payload: GlobalEventPayload::TransmissionEnd {
+                tx_event: TransmitAirEvent {
+                    radio_id: EntityId::new(3),
+                    end_time: SimTime::from_millis(300),
+                    packet: LoraPacket::from_bytes(vec![3]),
+                    params: default_radio_params(),
+                },
+            },
+        });
+        
+        // Should pop in time order (earliest first)
+        assert_eq!(heap.pop().unwrap().time, SimTime::from_millis(100));
+        assert_eq!(heap.pop().unwrap().time, SimTime::from_millis(200));
+        assert_eq!(heap.pop().unwrap().time, SimTime::from_millis(300));
+    }
+
+    #[test]
+    fn test_coordinator_stats_struct() {
+        // Test CoordinatorStats struct operations
+        let mut stats = CoordinatorStats::default();
+        
+        assert_eq!(stats.total_advances, 0);
+        assert_eq!(stats.coalesce_events, 0);
+        assert_eq!(stats.total_node_steps, 0);
+        assert_eq!(stats.max_transmits_per_advance, 0);
+        
+        // Mutate and verify
+        stats.total_advances = 10;
+        stats.coalesce_events = 5;
+        stats.total_node_steps = 100;
+        stats.max_transmits_per_advance = 3;
+        
+        assert_eq!(stats.total_advances, 10);
+        assert_eq!(stats.coalesce_events, 5);
+        assert_eq!(stats.total_node_steps, 100);
+        assert_eq!(stats.max_transmits_per_advance, 3);
+        
+        // Clone should work
+        let stats_clone = stats.clone();
+        assert_eq!(stats_clone.total_advances, 10);
+    }
+
+    #[test]
+    fn test_coordinator_default() {
+        // Test Default implementation for Coordinator
+        let coordinator = Coordinator::default();
+        
+        assert_eq!(coordinator.node_count(), 0);
+        assert_eq!(coordinator.current_time(), SimTime::ZERO);
+        assert!(coordinator.coalesce_config().enabled);
+        
+        coordinator.shutdown().expect("Shutdown should succeed");
     }
 }

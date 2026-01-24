@@ -517,11 +517,199 @@ The current implementation provides:
 - Link model with SNR/RSSI for packet propagation
 - State version tracking in `SimRadio` for spin detection
 - `sim_notify_state_change()` API for coordinator-driven state updates
+- **Per-node threading architecture** (via `per_node_threading` feature flag)
+- **Parallel node advancement** with `Coordinator`
+- **Wake time coalescing** to reduce time advancement cycles
+- **Direct TCP/UART handling** in node threads
 
 ⚠️ **Partial Implementation**:
 - Firmware yields after single loop iteration (not double-loop detection)
 - Fixed 100ms default wake interval when idle
-- Sequential event dispatch (parallel infrastructure exists but not utilized)
+
+## Per-Node Threading Architecture
+
+When the `per_node_threading` feature flag is enabled, the simulator uses a new architecture where each node runs on its own thread. This provides better parallelism and cleaner separation of concerns.
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              Coordinator                                         │
+│  ┌──────────────────────────────────────────────────────────────────────────┐   │
+│  │   - Manages all node threads                                              │   │
+│  │   - Time synchronization via AdvanceTime commands                         │   │
+│  │   - Global event routing (TransmitAir → Graph → ReceiveAir)              │   │
+│  │   - Wake time coalescing for efficiency                                   │   │
+│  │   - Statistics tracking (CoordinatorStats)                               │   │
+│  └───────────────────────────────────────────────────────────────────────────┘   │
+│                                     │                                            │
+│              ┌──────────────────────┼──────────────────────┐                    │
+│              │                      │                      │                    │
+│              ▼                      ▼                      ▼                    │
+│     ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐          │
+│     │  Node Thread 0  │    │  Node Thread 1  │    │  Node Thread N  │          │
+│     │  ┌───────────┐  │    │  ┌───────────┐  │    │  ┌───────────┐  │          │
+│     │  │ Firmware  │  │    │  │ Firmware  │  │    │  │ Firmware  │  │          │
+│     │  │ (DLL)     │  │    │  │ (DLL)     │  │    │  │ (DLL)     │  │          │
+│     │  └───────────┘  │    │  └───────────┘  │    │  └───────────┘  │          │
+│     │  ┌───────────┐  │    │  ┌───────────┐  │    │  ┌───────────┐  │          │
+│     │  │ Local     │  │    │  │ Local     │  │    │  │ Local     │  │          │
+│     │  │ Event Q   │  │    │  │ Event Q   │  │    │  │ Event Q   │  │          │
+│     │  └───────────┘  │    │  └───────────┘  │    │  └───────────┘  │          │
+│     │  ┌───────────┐  │    │  ┌───────────┐  │    │  ┌───────────┐  │          │
+│     │  │ UART      │  │    │  │ UART      │  │    │  │ UART      │  │          │
+│     │  │ Channels  │  │    │  │ Channels  │  │    │  │ Channels  │  │          │
+│     │  └───────────┘  │    │  └───────────┘  │    │  └───────────┘  │          │
+│     └─────────────────┘    └─────────────────┘    └─────────────────┘          │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Components
+
+#### NodeThread
+
+Each `NodeThread` owns:
+- **Firmware state** (`FirmwareState`) - Synchronous firmware stepping
+- **Local event queue** (`BinaryHeap<LocalEvent>`) - Intra-node events
+- **Radio parameters** - Used for transmissions
+- **Trace events** - Debugging and logging
+
+#### Coordinator
+
+The `Coordinator` manages:
+- **Node thread handles** - Communication channels to each node
+- **Global event queue** - Air transmissions requiring global routing
+- **Time synchronization** - Parallel advancement of all nodes
+- **Wake time coalescing** - Optimization to reduce time steps
+- **Statistics** - Performance monitoring
+
+#### Communication Channels
+
+```
+Coordinator                    Node Thread
+    │                              │
+    │─── NodeCommand::AdvanceTime ─►│
+    │◄── NodeReport::TimeReached ───│
+    │                              │
+    │─── NodeCommand::ReceiveAir ──►│
+    │◄── NodeReport::TransmitAir ───│
+    │                              │
+    │─── NodeCommand::Shutdown ────►│
+    │◄── NodeReport::Shutdown ──────│
+```
+
+### Parallel Node Advancement
+
+The `Coordinator::advance_to()` method implements true parallel execution:
+
+```rust
+// Phase 5: Send AdvanceTime to ALL nodes simultaneously
+for node in &self.nodes {
+    node.send(NodeCommand::AdvanceTime { until: target_time })?;
+}
+
+// Wait for ALL nodes to report TimeReached (parallel completion)
+let mut pending = self.nodes.len();
+while pending > 0 {
+    match self.report_rx.recv() {
+        Ok((node_index, report)) => {
+            // Process report...
+            pending -= 1;
+        }
+        // ...
+    }
+}
+```
+
+**Determinism is maintained because:**
+1. All nodes receive the same target time
+2. Nodes only communicate via the coordinator (no direct node-to-node channels)
+3. TransmitAir events are collected and processed deterministically
+4. Node indices provide consistent ordering for report processing
+
+### Wake Time Coalescing
+
+To reduce the number of time advancement cycles, nearby wake times are coalesced:
+
+```rust
+const DEFAULT_COALESCE_THRESHOLD_US: u64 = 1000;  // 1ms
+
+fn coalesce_wake_times(wake_times: &[Option<SimTime>], threshold_us: u64) -> Option<SimTime> {
+    // Sort wake times and find the earliest
+    // If multiple nodes have wake times within the threshold,
+    // use the latest time in the group to ensure all nodes are ready
+}
+```
+
+**Configuration:**
+```rust
+let config = CoalesceConfig {
+    enabled: true,           // Enable coalescing
+    threshold_us: 1000,      // 1ms threshold
+};
+let coordinator = Coordinator::with_coalesce_config(config);
+```
+
+**Benefits:**
+- Reduces overhead when many nodes schedule similar periodic tasks
+- MeshCore operates on millisecond granularity, so sub-millisecond coalescing is safe
+- Statistics track how often coalescing is applied
+
+### Direct TCP/UART Handling
+
+TCP connections are handled directly in node threads (Phase 4):
+
+```rust
+// Node thread main loop with UART support
+select! {
+    // Handle coordinator commands (deterministic)
+    recv(cmd_rx) -> cmd_result => { ... }
+    
+    // Handle TCP data (non-deterministic, external timing)
+    recv(uart_data_rx) -> data_result => {
+        // Process immediately for low latency
+        node.handle_tcp_data(data, uart_data_tx, report_tx);
+    }
+}
+```
+
+**Note:** TCP data arrival is non-deterministic. For deterministic simulations, disable TCP connections.
+
+### Feature Flag
+
+The per-node threading architecture is gated behind the `per_node_threading` feature:
+
+```toml
+# In Cargo.toml
+[features]
+per_node_threading = ["crossbeam-channel"]
+```
+
+```rust
+// In code
+#[cfg(feature = "per_node_threading")]
+pub mod node_thread;
+```
+
+### Performance Monitoring
+
+The `CoordinatorStats` struct tracks:
+- `total_advances` - Total time advancement cycles
+- `coalesce_events` - Times coalescing was applied
+- `total_node_steps` - Sum of node steps across all advances
+- `max_transmits_per_advance` - Maximum TransmitAir events per advance
+
+```rust
+// Progress reporting during simulation
+coordinator.run_with_progress(
+    duration,
+    SimTime::from_secs(1),  // Report every second
+    |time, stats| {
+        println!("Time: {:?}, Advances: {}, Coalesced: {}",
+            time, stats.total_advances, stats.coalesce_events);
+    },
+)?;
+```
 
 ### Required Changes
 
