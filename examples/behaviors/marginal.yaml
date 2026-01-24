@@ -1,0 +1,26 @@
+# Marginal Link Overlay
+# Use with: cargo run -- run examples/topologies/two_peers.yaml examples/behaviors/marginal.yaml
+#
+# Configures the links to be marginal (unreliable), causing frequent
+# packet loss and retransmissions. Useful for testing reliability mechanisms.
+
+edges:
+  # Alice <-> Repeater (marginal link - near noise floor)
+  - from: "Alice"
+    to: "Repeater"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+  - from: "Repeater"
+    to: "Alice"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+
+  # Repeater <-> Bob (marginal link)
+  - from: "Repeater"
+    to: "Bob"
+    mean_snr_db_at20dbm: -2.0
+    snr_std_dev: 3.5
+  - from: "Bob"
+    to: "Repeater"
+    mean_snr_db_at20dbm: -2.0
+    snr_std_dev: 3.5

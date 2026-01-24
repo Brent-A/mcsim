@@ -1,0 +1,21 @@
+[package]
+name = "mcsim-link"
+description = "Link estimation and prediction using DEM and ITM models"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+mcsim-dem.workspace = true
+mcsim-itm.workspace = true
+mcsim-model.workspace = true
+thiserror.workspace = true
+serde = { workspace = true, optional = true }
+argmin.workspace = true
+argmin-math.workspace = true
+statrs.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde"]

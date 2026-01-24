@@ -1,0 +1,43 @@
+﻿# One Companion Test Network
+# This is a simplified network for testing a single companion node.
+#
+# Network topology:
+#   [Sender:Companion]
+#
+# Sender posts to the #test channel every 5 seconds.
+
+# Default parameters
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+    companion:
+      tx_delay_min_ms: 100
+      tx_delay_max_ms: 500
+      ack_timeout_s: 30
+      max_retries: 3
+      advert_interval_s: 900
+
+# Node definitions
+nodes:
+  # Sender companion - posts to #test channel every 5 seconds
+  - name: "Sender"
+    location:
+      lat: 37.7749
+      lon: -122.4194
+    keys:
+      private_key: "*"
+      public_key: "cc01*"
+    firmware:
+      type: Companion
+    agent:
+      channel:
+        enabled: true
+        targets:
+          - "#test"
+        interval_s: 5.0
+        interval_jitter_s: 0.0

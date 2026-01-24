@@ -1,0 +1,63 @@
+# Room Server Network
+# Two companions adjacent to a room server for channel messaging.
+#
+# Network topology:
+#   [Alice:Companion] <---> [RoomServer] <---> [Bob:Companion]
+#
+# Tests room server functionality and channel-based group messaging.
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+
+nodes:
+  - name: "Alice"
+    location:
+      lat: 47.6050
+      lon: -122.3600
+    firmware:
+      type: Companion
+
+  - name: "Bob"
+    location:
+      lat: 47.6150
+      lon: -122.3400
+    firmware:
+      type: Companion
+
+  - name: "ChatRoom"
+    location:
+      lat: 47.6100
+      lon: -122.3500
+    firmware:
+      type: RoomServer
+
+edges:
+  # Alice <-> Room Server
+  - from: "Alice"
+    to: "ChatRoom"
+    mean_snr_db_at20dbm: 16.0
+  - from: "ChatRoom"
+    to: "Alice"
+    mean_snr_db_at20dbm: 16.0
+
+  # Bob <-> Room Server
+  - from: "Bob"
+    to: "ChatRoom"
+    mean_snr_db_at20dbm: 14.0
+  - from: "ChatRoom"
+    to: "Bob"
+    mean_snr_db_at20dbm: 14.0
+
+  # Alice can also directly hear Bob (weak link)
+  - from: "Alice"
+    to: "Bob"
+    mean_snr_db_at20dbm: 3.0
+  - from: "Bob"
+    to: "Alice"
+    mean_snr_db_at20dbm: 3.0

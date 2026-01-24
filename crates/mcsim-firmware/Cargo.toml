@@ -1,0 +1,18 @@
+[package]
+name = "mcsim-firmware"
+description = "MeshCore firmware simulation for MCSim"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+meshcore-packet.workspace = true
+mcsim-common.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+rand.workspace = true
+log = "0.4"
+libloading = "0.8"
+sha2 = "0.10"

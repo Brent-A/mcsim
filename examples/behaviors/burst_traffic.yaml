@@ -1,0 +1,22 @@
+# Burst Traffic Behavior
+# Alice and Bob both send exactly 5 channel messages each to cause collisions.
+#
+# Use with topologies that have Alice and Bob nodes visible to repeaters.
+# Example: cargo run -- run examples/topologies/diamond.yaml examples/behaviors/burst_traffic.yaml
+
+nodes:
+  - name: "Alice"
+    agent:
+      channel:
+        enabled: true
+        interval_s: 0.5
+        startup_s: 0.1
+        message_count: 5
+
+  - name: "Bob"
+    agent:
+      channel:
+        enabled: true
+        interval_s: 0.5
+        startup_s: 0.1
+        message_count: 5

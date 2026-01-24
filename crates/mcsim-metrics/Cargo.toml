@@ -1,0 +1,16 @@
+[package]
+name = "mcsim-metrics"
+version = "0.1.0"
+edition = "2021"
+description = "Metrics infrastructure for MeshCore simulator"
+
+[dependencies]
+metrics = "0.24"
+
+[features]
+default = []
+prometheus = ["metrics-exporter-prometheus"]
+
+[dependencies.metrics-exporter-prometheus]
+version = "0.16"
+optional = true

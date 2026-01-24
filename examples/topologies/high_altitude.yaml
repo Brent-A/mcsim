@@ -1,0 +1,197 @@
+# High Altitude Network
+# A ground mesh with a high-altitude repeater that can see all nodes.
+#
+# Network topology:
+#                        [HAB: High Altitude Balloon]
+#                       /    /    |    |    \    \
+#                      /    /     |    |     \    \
+#   [Alice] --- [R1]--[R2]--[R3]--[R4]--[R5]--[R6] --- [Bob]
+#
+# The ground mesh of 6 repeaters forms a linear backbone.
+# The high-altitude repeater (HAB) can reach all ground nodes.
+# This tests the impact of "super nodes" on routing behavior.
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+
+nodes:
+  # Ground companions at ends
+  - name: "Alice"
+    location:
+      lat: 47.5000
+      lon: -122.5000
+    firmware:
+      type: Companion
+
+  - name: "Bob"
+    location:
+      lat: 47.5000
+      lon: -122.2000
+    firmware:
+      type: Companion
+
+  # Ground repeater chain
+  - name: "R1"
+    location:
+      lat: 47.5000
+      lon: -122.4500
+    firmware:
+      type: Repeater
+
+  - name: "R2"
+    location:
+      lat: 47.5000
+      lon: -122.4000
+    firmware:
+      type: Repeater
+
+  - name: "R3"
+    location:
+      lat: 47.5000
+      lon: -122.3500
+    firmware:
+      type: Repeater
+
+  - name: "R4"
+    location:
+      lat: 47.5000
+      lon: -122.3000
+    firmware:
+      type: Repeater
+
+  - name: "R5"
+    location:
+      lat: 47.5000
+      lon: -122.2800
+    firmware:
+      type: Repeater
+
+  - name: "R6"
+    location:
+      lat: 47.5000
+      lon: -122.2500
+    firmware:
+      type: Repeater
+
+  # High altitude repeater (balloon/aircraft at ~10km altitude)
+  - name: "HAB"
+    location:
+      lat: 47.5500
+      lon: -122.3500
+      alt: 10000
+    firmware:
+      type: Repeater
+
+edges:
+  # Ground backbone chain
+  - from: "Alice"
+    to: "R1"
+    mean_snr_db_at20dbm: 15.0
+  - from: "R1"
+    to: "Alice"
+    mean_snr_db_at20dbm: 15.0
+
+  - from: "R1"
+    to: "R2"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R2"
+    to: "R1"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "R2"
+    to: "R3"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R3"
+    to: "R2"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "R3"
+    to: "R4"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R4"
+    to: "R3"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "R4"
+    to: "R5"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R5"
+    to: "R4"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "R5"
+    to: "R6"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R6"
+    to: "R5"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "R6"
+    to: "Bob"
+    mean_snr_db_at20dbm: 15.0
+  - from: "Bob"
+    to: "R6"
+    mean_snr_db_at20dbm: 15.0
+
+  # High altitude balloon to all ground nodes (excellent LoS from altitude)
+  - from: "HAB"
+    to: "Alice"
+    mean_snr_db_at20dbm: 10.0
+  - from: "Alice"
+    to: "HAB"
+    mean_snr_db_at20dbm: 10.0
+
+  - from: "HAB"
+    to: "R1"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R1"
+    to: "HAB"
+    mean_snr_db_at20dbm: 12.0
+
+  - from: "HAB"
+    to: "R2"
+    mean_snr_db_at20dbm: 13.0
+  - from: "R2"
+    to: "HAB"
+    mean_snr_db_at20dbm: 13.0
+
+  - from: "HAB"
+    to: "R3"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R3"
+    to: "HAB"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "HAB"
+    to: "R4"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R4"
+    to: "HAB"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "HAB"
+    to: "R5"
+    mean_snr_db_at20dbm: 13.0
+  - from: "R5"
+    to: "HAB"
+    mean_snr_db_at20dbm: 13.0
+
+  - from: "HAB"
+    to: "R6"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R6"
+    to: "HAB"
+    mean_snr_db_at20dbm: 12.0
+
+  - from: "HAB"
+    to: "Bob"
+    mean_snr_db_at20dbm: 10.0
+  - from: "Bob"
+    to: "HAB"
+    mean_snr_db_at20dbm: 10.0

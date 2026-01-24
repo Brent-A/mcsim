@@ -1,0 +1,72 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/meshcore-packet",
+    "crates/mcsim-common",
+    "crates/mcsim-lora",
+    "crates/mcsim-firmware",
+    "crates/mcsim-agents",
+    "crates/mcsim-model",
+    "crates/mcsim-metrics",
+    "crates/mcsim-runner",
+    "crates/mcsim-companion-protocol",
+    "crates/mcsim-cli-protocol",
+    "crates/mcsim-itm",
+    "crates/mcsim-dem",
+    "crates/mcsim-link",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Brent Allen"]
+license = "MIT"
+repository = "https://github.com/Brent-A/mcsim"
+
+[workspace.dependencies]
+# Internal crates
+meshcore-packet = { path = "crates/meshcore-packet" }
+mcsim-common = { path = "crates/mcsim-common" }
+mcsim-lora = { path = "crates/mcsim-lora" }
+mcsim-firmware = { path = "crates/mcsim-firmware" }
+mcsim-agents = { path = "crates/mcsim-agents" }
+mcsim-model = { path = "crates/mcsim-model" }
+mcsim-metrics = { path = "crates/mcsim-metrics" }
+mcsim-runner = { path = "crates/mcsim-runner" }
+mcsim-companion-protocol = { path = "crates/mcsim-companion-protocol" }
+mcsim-cli-protocol = { path = "crates/mcsim-cli-protocol" }
+mcsim-itm = { path = "crates/mcsim-itm" }
+mcsim-dem = { path = "crates/mcsim-dem" }
+mcsim-link = { path = "crates/mcsim-link" }
+
+# External dependencies
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+rand = "0.8"
+rand_chacha = "0.3"
+rand_distr = "0.4"
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.0", features = ["derive"] }
+rerun = "0.28"
+tracing = "0.1"
+metrics = "0.24"
+argmin = { version = "0.10", features = ["serde1"] }
+argmin-math = { version = "0.4", features = ["vec"] }
+statrs = "0.18"
+
+# Optimize heavy dependencies even in debug builds
+[profile.dev.package.tiff]
+opt-level = 3
+
+[profile.dev.package.flate2]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.weezl]
+opt-level = 3

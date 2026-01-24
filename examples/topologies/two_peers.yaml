@@ -1,0 +1,64 @@
+# Two Peers Network
+# Minimal network with two companions connected through a single repeater.
+#
+# Network topology:
+#   [Alice:Companion] <---> [Repeater] <---> [Bob:Companion]
+#
+# Useful for testing basic peer-to-peer communication.
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+    cli:
+      password: "admin123"
+
+nodes:
+  - name: "Repeater"
+    location:
+      lat: 47.6100
+      lon: -122.3500
+    keys:
+      public_key: "01*"
+    firmware:
+      type: Repeater
+
+  - name: "Alice"
+    location:
+      lat: 47.6050
+      lon: -122.3550
+    firmware:
+      type: Companion
+    keys:
+      public_key: "0a*"
+    
+
+  - name: "Bob"
+    location:
+      lat: 47.6150
+      lon: -122.3450
+    firmware:
+      type: Companion
+    keys:
+      public_key: "0b*"
+
+edges:
+  # Alice <-> Repeater (good link)
+  - from: "Alice"
+    to: "Repeater"
+    mean_snr_db_at20dbm: 15.0
+  - from: "Repeater"
+    to: "Alice"
+    mean_snr_db_at20dbm: 15.0
+
+  # Repeater <-> Bob (good link)
+  - from: "Repeater"
+    to: "Bob"
+    mean_snr_db_at20dbm: 15.0
+  - from: "Bob"
+    to: "Repeater"
+    mean_snr_db_at20dbm: 15.0

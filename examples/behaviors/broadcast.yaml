@@ -1,0 +1,12 @@
+# Broadcast Behavior Overlay
+# Use with any topology that has an Alice node.
+# Example: cargo run -- run examples/topologies/simple.yaml examples/behaviors/broadcast.yaml
+#
+# Configures Alice to send periodic messages to the #test channel.
+
+nodes:
+  # Alice broadcasts to Public
+  - name: "Alice"
+    agent:
+      channel:
+        enabled: true

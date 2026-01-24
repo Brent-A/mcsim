@@ -1,0 +1,14 @@
+# Single Direct Message Behavior
+# Alice sends exactly 1 direct message to Bob for deterministic testing.
+#
+# Use with topologies that have Alice and Bob nodes.
+# Example: cargo run -- run examples/topologies/two_peers.yaml examples/behaviors/single_dm.yaml
+
+nodes:
+  - name: "Alice"
+    agent:
+      direct:
+        enabled: true
+        message_count: 1
+        targets:
+          - "Bob"

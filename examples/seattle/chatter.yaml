@@ -1,0 +1,121 @@
+# Seattle Network - Chat Traffic Overlay
+# Use with: cargo run -- run examples/seattle/sea.yaml examples/seattle/chatter.yaml
+#
+# Adds multiple companion nodes that generate realistic chat traffic patterns.
+# Includes both direct messages between users and channel broadcasts.
+
+nodes:
+  # Alice - Downtown user, chats with Bob and uses #general
+  - name: "Alice"
+    location:
+      lat: 47.6055
+      lon: -122.3310
+    firmware:
+      type: Companion
+    agent:
+      type: Human
+      dm_targets:
+        - "Bob"
+        - "Charlie"
+      channels:
+        - "#general"
+      dm_probability: 0.7
+      message_interval_min_s: 30.0
+      message_interval_max_s: 120.0
+      messages_per_session: 5
+      session_gap_min_s: 300.0
+      session_gap_max_s: 600.0
+
+  # Bob - Bellevue user, chats with Alice
+  - name: "Bob"
+    location:
+      lat: 47.6105
+      lon: -122.2000
+    firmware:
+      type: Companion
+    agent:
+      type: Human
+      dm_targets:
+        - "Alice"
+      channels:
+        - "#general"
+      dm_probability: 0.8
+      message_interval_min_s: 45.0
+      message_interval_max_s: 180.0
+      messages_per_session: 3
+      session_gap_min_s: 600.0
+      session_gap_max_s: 1200.0
+
+  # Charlie - North end user, posts to channels frequently
+  - name: "Charlie"
+    location:
+      lat: 47.7560
+      lon: -122.3400
+    firmware:
+      type: Companion
+    agent:
+      type: Human
+      dm_targets:
+        - "Alice"
+      channels:
+        - "#general"
+        - "#north-seattle"
+      dm_probability: 0.3
+      message_interval_min_s: 60.0
+      message_interval_max_s: 240.0
+      messages_per_session: 4
+      session_gap_min_s: 900.0
+      session_gap_max_s: 1800.0
+
+  # Dave - Auburn user, occasional chatter
+  - name: "Dave"
+    location:
+      lat: 47.3080
+      lon: -122.2270
+    firmware:
+      type: Companion
+    agent:
+      type: Human
+      dm_targets:
+        - "Bob"
+      channels:
+        - "#general"
+      dm_probability: 0.5
+      message_interval_min_s: 120.0
+      message_interval_max_s: 300.0
+      messages_per_session: 2
+      session_gap_min_s: 1800.0
+      session_gap_max_s: 3600.0
+
+edges:
+  # Alice to Downtown
+  - from: "Alice"
+    to: "SEA-Downtown"
+    mean_snr_db_at20dbm: 18.0
+  - from: "SEA-Downtown"
+    to: "Alice"
+    mean_snr_db_at20dbm: 18.0
+
+  # Bob to Bellevue
+  - from: "Bob"
+    to: "SEA-Bellevue"
+    mean_snr_db_at20dbm: 16.0
+  - from: "SEA-Bellevue"
+    to: "Bob"
+    mean_snr_db_at20dbm: 16.0
+
+  # Charlie to Shoreline
+  - from: "Charlie"
+    to: "SEA-Shoreline"
+    mean_snr_db_at20dbm: 14.0
+  - from: "SEA-Shoreline"
+    to: "Charlie"
+    mean_snr_db_at20dbm: 14.0
+
+  # Dave to Auburn
+  - from: "Dave"
+    to: "SEA-Auburn"
+    mean_snr_db_at20dbm: 15.0
+  - from: "SEA-Auburn"
+    to: "Dave"
+    mean_snr_db_at20dbm: 15.0

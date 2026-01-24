@@ -1,0 +1,16 @@
+[package]
+name = "mcsim-lora"
+description = "LoRa radio simulation for MCSim"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+meshcore-packet.workspace = true
+mcsim-common.workspace = true
+mcsim-metrics = { path = "../mcsim-metrics" }
+thiserror.workspace = true
+serde.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true

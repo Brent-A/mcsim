@@ -1,0 +1,14 @@
+[package]
+name = "mcsim-cli-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "UART CLI protocol for communicating with MeshCore repeater and room server firmware"
+license = "MIT"
+
+[dependencies]
+thiserror = "2"
+bytes = "1"
+log = "0.4"
+
+[dev-dependencies]
+

@@ -1,0 +1,48 @@
+# CLI Test Network
+# Test topology for CLI agent tracing
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+    cli:
+      password: "admin123"
+      commands:
+        - "get name"
+        - "get tx"
+
+nodes:
+  - name: "Repeater"
+    location:
+      lat: 47.6100
+      lon: -122.3500
+    keys:
+      public_key: "01*"
+    firmware:
+      type: Repeater
+
+  - name: "RoomServer"
+    location:
+      lat: 47.6150
+      lon: -122.3450
+    keys:
+      public_key: "02*"
+    firmware:
+      type: RoomServer
+    room_server:
+      room_id: "00112233445566778899aabbccddeeff"
+
+edges:
+  - from: "Repeater"
+    to: "RoomServer"
+    mean_snr_db_at20dbm: 15.0
+  - from: "RoomServer"
+    to: "Repeater"
+    mean_snr_db_at20dbm: 15.0
+
+simulation:
+  simulation/duration_s: 10

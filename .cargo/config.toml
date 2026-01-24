@@ -1,0 +1,12 @@
+# Use LLD linker instead of the default MSVC linker for significantly faster link times.
+# The rerun dependency (when enabled) brings in ~2000 crates, resulting in a ~20MB debug binary.
+# With the default linker, incremental rebuilds take ~174s. With LLD, they take ~2-3s.
+# 
+# Additionally, rerun is now an optional feature. Without it, incremental rebuilds take ~2s.
+# To build with rerun visualization support: cargo build --features rerun
+#
+# To use LLD (recommended for faster builds), install LLVM and uncomment the linker line below.
+# Download from: https://releases.llvm.org or via `winget install LLVM.LLVM`
+# Adjust the path if LLVM is installed elsewhere.
+[target.x86_64-pc-windows-msvc]
+# linker = "lld-link"

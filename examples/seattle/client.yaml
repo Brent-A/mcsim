@@ -1,0 +1,43 @@
+# Seattle Network - User Client Connection Overlay
+# Use with: cargo run -- run examples/seattle/sea.yaml examples/seattle/client.yaml
+#
+# Configures a companion node with a UART port exposed for connecting
+# a user client application (mobile app, desktop client, etc.).
+#
+# After starting the simulation, connect your client to localhost:9200
+
+defaults:
+  node:
+    companion:
+      # Do not auto-populate contacts as the list is too large
+      contacts:
+        - "HOWL🏷️"
+        - "👽Cisien"
+        - "🌲 Tree"
+        - "ClientNode"
+
+
+nodes:
+  # User-controlled companion attached to Capitol Hill
+  - name: "ClientNode"
+    location:
+      lat: 47.6250
+      lon: -122.3210
+    firmware:
+      type: Companion
+      uart_port: 9200
+    # No agent - this node is controlled by external user client
+    agent:
+      direct:
+        enabled: false
+      channel:
+        enabled: false
+
+edges:
+  # Connect client node to Capitol Hill with a good link
+  - from: "ClientNode"
+    to: N Capitol Hill 2.0
+    mean_snr_db_at20dbm: 18.0
+  - from: N Capitol Hill 2.0
+    to: "ClientNode"
+    mean_snr_db_at20dbm: 18.0

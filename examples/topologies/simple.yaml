@@ -1,0 +1,86 @@
+# Simple MeshCore Network
+# A basic mesh with 3 repeaters and 2 companions in a linear topology.
+#
+# Network topology:
+#   [Alice:Companion] <---> [Repeater1] <---> [Repeater2] <---> [Repeater3] <---> [Bob:Companion]
+#
+# Alice and Bob can communicate via the repeater chain.
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+
+nodes:
+  # Repeater backbone
+  - name: "Repeater1"
+    location:
+      lat: 47.6000
+      lon: -122.4000
+    firmware:
+      type: Repeater
+
+  - name: "Repeater2"
+    location:
+      lat: 47.6100
+      lon: -122.3800
+    firmware:
+      type: Repeater
+
+  - name: "Repeater3"
+    location:
+      lat: 47.6200
+      lon: -122.3600
+    firmware:
+      type: Repeater
+
+  # Companion endpoints
+  - name: "Alice"
+    location:
+      lat: 47.5950
+      lon: -122.4050
+    firmware:
+      type: Companion
+
+  - name: "Bob"
+    location:
+      lat: 47.6250
+      lon: -122.3550
+    firmware:
+      type: Companion
+
+edges:
+  # Alice <-> Repeater1
+  - from: "Alice"
+    to: "Repeater1"
+    mean_snr_db_at20dbm: 15.0
+  - from: "Repeater1"
+    to: "Alice"
+    mean_snr_db_at20dbm: 15.0
+
+  # Repeater chain
+  - from: "Repeater1"
+    to: "Repeater2"
+    mean_snr_db_at20dbm: 12.0
+  - from: "Repeater2"
+    to: "Repeater1"
+    mean_snr_db_at20dbm: 12.0
+
+  - from: "Repeater2"
+    to: "Repeater3"
+    mean_snr_db_at20dbm: 12.0
+  - from: "Repeater3"
+    to: "Repeater2"
+    mean_snr_db_at20dbm: 12.0
+
+  # Repeater3 <-> Bob
+  - from: "Repeater3"
+    to: "Bob"
+    mean_snr_db_at20dbm: 14.0
+  - from: "Bob"
+    to: "Repeater3"
+    mean_snr_db_at20dbm: 14.0

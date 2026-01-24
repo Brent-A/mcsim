@@ -1,0 +1,49 @@
+[package]
+name = "mcsim-runner"
+description = "CLI runner for MCSim simulation"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "mcsim_runner"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mcsim"
+path = "src/main.rs"
+
+[features]
+default = []
+rerun = ["dep:rerun"]
+
+[dependencies]
+meshcore-packet.workspace = true
+mcsim-common.workspace = true
+mcsim-lora.workspace = true
+mcsim-metrics.workspace = true
+mcsim-model.workspace = true
+mcsim-firmware.workspace = true
+mcsim-dem.workspace = true
+mcsim-itm.workspace = true
+mcsim-link.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+clap.workspace = true
+chrono.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+metrics.workspace = true
+rerun = { workspace = true, optional = true }
+ctrlc = "3.4"
+tokio = { version = "1.0", features = ["rt-multi-thread", "net", "sync", "io-util", "macros", "time"] }
+hex = "0.4"
+parking_lot = "0.12"
+rayon = "1.10"
+memory-stats = "1.2"
+
+[dev-dependencies]
+serial_test = "3.0"

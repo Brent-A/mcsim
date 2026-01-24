@@ -1,0 +1,61 @@
+﻿# Two Companion Test Network
+# This is a simplified network for testing direct companion-to-companion communication.
+#
+# Network topology:
+#   [Sender:Companion] <--> [Receiver:Companion]
+#
+# Sender posts to the #test channel every 5 seconds.
+# Receiver should receive all channel messages.
+
+# Default parameters
+defaults:
+
+
+# Node definitions
+nodes:
+  # Sender companion - posts to #test channel every 5 seconds
+  - name: "Sender"
+    location:
+      lat: 37.7749
+      lon: -122.4194
+    keys:
+      private_key: "*"
+      public_key: "cc01*"
+    firmware:
+      type: Companion
+    agent:
+      channel:
+        enabled: true
+        targets:
+          - "#test"
+        interval_s: 5.0
+        interval_jitter_s: 0.0
+
+  # Receiver companion - subscribed to #test channel (receives only, doesn't send)
+  - name: "Receiver"
+    location:
+      lat: 37.7750
+      lon: -122.4195
+    keys:
+      private_key: "*"
+      public_key: "cc02*"
+    firmware:
+      type: Companion
+    agent:
+      channel:
+        enabled: true
+        targets:
+          - "#test"
+        # Receiver doesn't initiate - set very long intervals
+        startup_s: 999999
+
+# Edge definitions (direct bidirectional link between companions)
+edges:
+  - from: "Sender"
+    to: "Receiver"
+    mean_snr_db_at20dbm: 15.0
+    rssi_dbm: -80
+  - from: "Receiver"
+    to: "Sender"
+    mean_snr_db_at20dbm: 15.0
+    rssi_dbm: -80

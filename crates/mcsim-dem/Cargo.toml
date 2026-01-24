@@ -1,0 +1,19 @@
+[package]
+name = "mcsim-dem"
+description = "Digital Elevation Model (DEM) reader for USGS GeoTIFF files and AWS terrain tiles"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tiff = "0.9"
+reqwest = { version = "0.12", features = ["blocking"] }
+
+[dev-dependencies]
+approx = "0.5"
+
+[[example]]
+name = "query_elevation"
+path = "examples/query_elevation.rs"

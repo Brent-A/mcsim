@@ -1,0 +1,305 @@
+# Multi-Path Network
+# Four companions surrounding a 3x3 grid of repeaters.
+#
+# Network topology:
+#                    [Charlie]
+#                    |  |  |
+#            +--[R1]---[R2]---[R3]--+
+#            |   |      |      |   |
+# [Alice] --+--[R4]---[R5]---[R6]--+-- [Bob]
+#            |   |      |      |   |
+#            +--[R7]---[R8]---[R9]--+
+#                    |  |  |
+#                    [Dave]
+#
+# Alice connects to left-column repeaters (R1, R4, R7).
+# Bob connects to right-column repeaters (R3, R6, R9).
+# Charlie connects to top-row repeaters (R1, R2, R3).
+# Dave connects to bottom-row repeaters (R7, R8, R9).
+# Multiple redundant paths exist between all companions.
+# Tests multi-path routing and load distribution.
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+
+nodes:
+  # Companions on all four sides
+  - name: "Alice"
+    location:
+      lat: 47.6100
+      lon: -122.4200
+    firmware:
+      type: Companion
+
+  - name: "Bob"
+    location:
+      lat: 47.6100
+      lon: -122.2800
+    firmware:
+      type: Companion
+
+  - name: "Charlie"
+    location:
+      lat: 47.6300
+      lon: -122.3500
+    firmware:
+      type: Companion
+
+  - name: "Dave"
+    location:
+      lat: 47.5900
+      lon: -122.3500
+    firmware:
+      type: Companion
+
+  # 3x3 grid of repeaters
+  # Top row
+  - name: "R1"
+    location:
+      lat: 47.6200
+      lon: -122.3800
+    firmware:
+      type: Repeater
+
+  - name: "R2"
+    location:
+      lat: 47.6200
+      lon: -122.3500
+    firmware:
+      type: Repeater
+
+  - name: "R3"
+    location:
+      lat: 47.6200
+      lon: -122.3200
+    firmware:
+      type: Repeater
+
+  # Middle row
+  - name: "R4"
+    location:
+      lat: 47.6100
+      lon: -122.3800
+    firmware:
+      type: Repeater
+
+  - name: "R5"
+    location:
+      lat: 47.6100
+      lon: -122.3500
+    firmware:
+      type: Repeater
+
+  - name: "R6"
+    location:
+      lat: 47.6100
+      lon: -122.3200
+    firmware:
+      type: Repeater
+
+  # Bottom row
+  - name: "R7"
+    location:
+      lat: 47.6000
+      lon: -122.3800
+    firmware:
+      type: Repeater
+
+  - name: "R8"
+    location:
+      lat: 47.6000
+      lon: -122.3500
+    firmware:
+      type: Repeater
+
+  - name: "R9"
+    location:
+      lat: 47.6000
+      lon: -122.3200
+    firmware:
+      type: Repeater
+
+edges:
+  # Alice to left column (R1, R4, R7)
+  - from: "Alice"
+    to: "R1"
+    mean_snr_db_at20dbm: 10.0
+  - from: "R1"
+    to: "Alice"
+    mean_snr_db_at20dbm: 10.0
+
+  - from: "Alice"
+    to: "R4"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R4"
+    to: "Alice"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "Alice"
+    to: "R7"
+    mean_snr_db_at20dbm: 10.0
+  - from: "R7"
+    to: "Alice"
+    mean_snr_db_at20dbm: 10.0
+
+  # Bob to right column (R3, R6, R9)
+  - from: "Bob"
+    to: "R3"
+    mean_snr_db_at20dbm: 10.0
+  - from: "R3"
+    to: "Bob"
+    mean_snr_db_at20dbm: 10.0
+
+  - from: "Bob"
+    to: "R6"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R6"
+    to: "Bob"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "Bob"
+    to: "R9"
+    mean_snr_db_at20dbm: 10.0
+  - from: "R9"
+    to: "Bob"
+    mean_snr_db_at20dbm: 10.0
+
+  # Horizontal links - top row
+  - from: "R1"
+    to: "R2"
+    mean_snr_db_at20dbm: 15.0
+  - from: "R2"
+    to: "R1"
+    mean_snr_db_at20dbm: 15.0
+
+  - from: "R2"
+    to: "R3"
+    mean_snr_db_at20dbm: 15.0
+  - from: "R3"
+    to: "R2"
+    mean_snr_db_at20dbm: 15.0
+
+  # Horizontal links - middle row
+  - from: "R4"
+    to: "R5"
+    mean_snr_db_at20dbm: 16.0
+  - from: "R5"
+    to: "R4"
+    mean_snr_db_at20dbm: 16.0
+
+  - from: "R5"
+    to: "R6"
+    mean_snr_db_at20dbm: 16.0
+  - from: "R6"
+    to: "R5"
+    mean_snr_db_at20dbm: 16.0
+
+  # Horizontal links - bottom row
+  - from: "R7"
+    to: "R8"
+    mean_snr_db_at20dbm: 15.0
+  - from: "R8"
+    to: "R7"
+    mean_snr_db_at20dbm: 15.0
+
+  - from: "R8"
+    to: "R9"
+    mean_snr_db_at20dbm: 15.0
+  - from: "R9"
+    to: "R8"
+    mean_snr_db_at20dbm: 15.0
+
+  # Vertical links - left column
+  - from: "R1"
+    to: "R4"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R4"
+    to: "R1"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "R4"
+    to: "R7"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R7"
+    to: "R4"
+    mean_snr_db_at20dbm: 14.0
+
+  # Vertical links - center column
+  - from: "R2"
+    to: "R5"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R5"
+    to: "R2"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "R5"
+    to: "R8"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R8"
+    to: "R5"
+    mean_snr_db_at20dbm: 14.0
+
+  # Vertical links - right column
+  - from: "R3"
+    to: "R6"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R6"
+    to: "R3"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "R6"
+    to: "R9"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R9"
+    to: "R6"
+    mean_snr_db_at20dbm: 14.0
+
+  # Charlie to top row (R1, R2, R3)
+  - from: "Charlie"
+    to: "R1"
+    mean_snr_db_at20dbm: 10.0
+  - from: "R1"
+    to: "Charlie"
+    mean_snr_db_at20dbm: 10.0
+
+  - from: "Charlie"
+    to: "R2"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R2"
+    to: "Charlie"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "Charlie"
+    to: "R3"
+    mean_snr_db_at20dbm: 10.0
+  - from: "R3"
+    to: "Charlie"
+    mean_snr_db_at20dbm: 10.0
+
+  # Dave to bottom row (R7, R8, R9)
+  - from: "Dave"
+    to: "R7"
+    mean_snr_db_at20dbm: 10.0
+  - from: "R7"
+    to: "Dave"
+    mean_snr_db_at20dbm: 10.0
+
+  - from: "Dave"
+    to: "R8"
+    mean_snr_db_at20dbm: 14.0
+  - from: "R8"
+    to: "Dave"
+    mean_snr_db_at20dbm: 14.0
+
+  - from: "Dave"
+    to: "R9"
+    mean_snr_db_at20dbm: 10.0
+  - from: "R9"
+    to: "Dave"
+    mean_snr_db_at20dbm: 10.0

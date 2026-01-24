@@ -1,0 +1,18 @@
+# Default configuration for predict-link
+# 
+# This file sets common radio and terrain parameters using the standard
+# model format (simulation section).
+#
+# Example:
+#   mcsim predict-link --config defaults.yaml 47.6062 -122.3321 47.6097 -122.3331
+#   mcsim predict-link --config defaults.yaml --config site.yaml 47.6 -122.3 47.7 -122.4
+
+simulation:
+  predict:
+    radio:
+      frequency_mhz: 910.525
+      tx_power_dbm: 20
+      spreading_factor: 7
+    terrain:
+      dem_dir: "./dem_data"
+      samples: 100

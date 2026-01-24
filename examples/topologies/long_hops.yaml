@@ -1,0 +1,1330 @@
+# Long Hops Network
+# A line of 64 repeaters, each with an adjacent companion.
+#
+# Network topology:
+#   [Alice]--[R1]--[R2]--[R3]-- ... --[R62]--[R63]--[R64]--[Bob]
+#             |     |     |            |      |      |
+#            [C1]  [C2]  [C3]  ...   [C62]  [C63]  [C64]
+#
+# Tests maximum hop counts and routing table scalability.
+# Messages from Alice to Bob traverse all 64 repeaters.
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+
+nodes:
+  # Starting companion
+  - name: "Alice"
+    location:
+      lat: 47.0000
+      lon: -122.5000
+    firmware:
+      type: Companion
+
+  # Generate 64 repeaters in a line, each with a companion
+  - name: "R01"
+    location: { lat: 47.0100, lon: -122.4900 }
+    firmware: { type: Repeater }
+  - name: "C01"
+    location: { lat: 47.0105, lon: -122.4905 }
+    firmware: { type: Companion }
+
+  - name: "R02"
+    location: { lat: 47.0200, lon: -122.4800 }
+    firmware: { type: Repeater }
+  - name: "C02"
+    location: { lat: 47.0205, lon: -122.4805 }
+    firmware: { type: Companion }
+
+  - name: "R03"
+    location: { lat: 47.0300, lon: -122.4700 }
+    firmware: { type: Repeater }
+  - name: "C03"
+    location: { lat: 47.0305, lon: -122.4705 }
+    firmware: { type: Companion }
+
+  - name: "R04"
+    location: { lat: 47.0400, lon: -122.4600 }
+    firmware: { type: Repeater }
+  - name: "C04"
+    location: { lat: 47.0405, lon: -122.4605 }
+    firmware: { type: Companion }
+
+  - name: "R05"
+    location: { lat: 47.0500, lon: -122.4500 }
+    firmware: { type: Repeater }
+  - name: "C05"
+    location: { lat: 47.0505, lon: -122.4505 }
+    firmware: { type: Companion }
+
+  - name: "R06"
+    location: { lat: 47.0600, lon: -122.4400 }
+    firmware: { type: Repeater }
+  - name: "C06"
+    location: { lat: 47.0605, lon: -122.4405 }
+    firmware: { type: Companion }
+
+  - name: "R07"
+    location: { lat: 47.0700, lon: -122.4300 }
+    firmware: { type: Repeater }
+  - name: "C07"
+    location: { lat: 47.0705, lon: -122.4305 }
+    firmware: { type: Companion }
+
+  - name: "R08"
+    location: { lat: 47.0800, lon: -122.4200 }
+    firmware: { type: Repeater }
+  - name: "C08"
+    location: { lat: 47.0805, lon: -122.4205 }
+    firmware: { type: Companion }
+
+  - name: "R09"
+    location: { lat: 47.0900, lon: -122.4100 }
+    firmware: { type: Repeater }
+  - name: "C09"
+    location: { lat: 47.0905, lon: -122.4105 }
+    firmware: { type: Companion }
+
+  - name: "R10"
+    location: { lat: 47.1000, lon: -122.4000 }
+    firmware: { type: Repeater }
+  - name: "C10"
+    location: { lat: 47.1005, lon: -122.4005 }
+    firmware: { type: Companion }
+
+  - name: "R11"
+    location: { lat: 47.1100, lon: -122.3900 }
+    firmware: { type: Repeater }
+  - name: "C11"
+    location: { lat: 47.1105, lon: -122.3905 }
+    firmware: { type: Companion }
+
+  - name: "R12"
+    location: { lat: 47.1200, lon: -122.3800 }
+    firmware: { type: Repeater }
+  - name: "C12"
+    location: { lat: 47.1205, lon: -122.3805 }
+    firmware: { type: Companion }
+
+  - name: "R13"
+    location: { lat: 47.1300, lon: -122.3700 }
+    firmware: { type: Repeater }
+  - name: "C13"
+    location: { lat: 47.1305, lon: -122.3705 }
+    firmware: { type: Companion }
+
+  - name: "R14"
+    location: { lat: 47.1400, lon: -122.3600 }
+    firmware: { type: Repeater }
+  - name: "C14"
+    location: { lat: 47.1405, lon: -122.3605 }
+    firmware: { type: Companion }
+
+  - name: "R15"
+    location: { lat: 47.1500, lon: -122.3500 }
+    firmware: { type: Repeater }
+  - name: "C15"
+    location: { lat: 47.1505, lon: -122.3505 }
+    firmware: { type: Companion }
+
+  - name: "R16"
+    location: { lat: 47.1600, lon: -122.3400 }
+    firmware: { type: Repeater }
+  - name: "C16"
+    location: { lat: 47.1605, lon: -122.3405 }
+    firmware: { type: Companion }
+
+  - name: "R17"
+    location: { lat: 47.1700, lon: -122.3300 }
+    firmware: { type: Repeater }
+  - name: "C17"
+    location: { lat: 47.1705, lon: -122.3305 }
+    firmware: { type: Companion }
+
+  - name: "R18"
+    location: { lat: 47.1800, lon: -122.3200 }
+    firmware: { type: Repeater }
+  - name: "C18"
+    location: { lat: 47.1805, lon: -122.3205 }
+    firmware: { type: Companion }
+
+  - name: "R19"
+    location: { lat: 47.1900, lon: -122.3100 }
+    firmware: { type: Repeater }
+  - name: "C19"
+    location: { lat: 47.1905, lon: -122.3105 }
+    firmware: { type: Companion }
+
+  - name: "R20"
+    location: { lat: 47.2000, lon: -122.3000 }
+    firmware: { type: Repeater }
+  - name: "C20"
+    location: { lat: 47.2005, lon: -122.3005 }
+    firmware: { type: Companion }
+
+  - name: "R21"
+    location: { lat: 47.2100, lon: -122.2900 }
+    firmware: { type: Repeater }
+  - name: "C21"
+    location: { lat: 47.2105, lon: -122.2905 }
+    firmware: { type: Companion }
+
+  - name: "R22"
+    location: { lat: 47.2200, lon: -122.2800 }
+    firmware: { type: Repeater }
+  - name: "C22"
+    location: { lat: 47.2205, lon: -122.2805 }
+    firmware: { type: Companion }
+
+  - name: "R23"
+    location: { lat: 47.2300, lon: -122.2700 }
+    firmware: { type: Repeater }
+  - name: "C23"
+    location: { lat: 47.2305, lon: -122.2705 }
+    firmware: { type: Companion }
+
+  - name: "R24"
+    location: { lat: 47.2400, lon: -122.2600 }
+    firmware: { type: Repeater }
+  - name: "C24"
+    location: { lat: 47.2405, lon: -122.2605 }
+    firmware: { type: Companion }
+
+  - name: "R25"
+    location: { lat: 47.2500, lon: -122.2500 }
+    firmware: { type: Repeater }
+  - name: "C25"
+    location: { lat: 47.2505, lon: -122.2505 }
+    firmware: { type: Companion }
+
+  - name: "R26"
+    location: { lat: 47.2600, lon: -122.2400 }
+    firmware: { type: Repeater }
+  - name: "C26"
+    location: { lat: 47.2605, lon: -122.2405 }
+    firmware: { type: Companion }
+
+  - name: "R27"
+    location: { lat: 47.2700, lon: -122.2300 }
+    firmware: { type: Repeater }
+  - name: "C27"
+    location: { lat: 47.2705, lon: -122.2305 }
+    firmware: { type: Companion }
+
+  - name: "R28"
+    location: { lat: 47.2800, lon: -122.2200 }
+    firmware: { type: Repeater }
+  - name: "C28"
+    location: { lat: 47.2805, lon: -122.2205 }
+    firmware: { type: Companion }
+
+  - name: "R29"
+    location: { lat: 47.2900, lon: -122.2100 }
+    firmware: { type: Repeater }
+  - name: "C29"
+    location: { lat: 47.2905, lon: -122.2105 }
+    firmware: { type: Companion }
+
+  - name: "R30"
+    location: { lat: 47.3000, lon: -122.2000 }
+    firmware: { type: Repeater }
+  - name: "C30"
+    location: { lat: 47.3005, lon: -122.2005 }
+    firmware: { type: Companion }
+
+  - name: "R31"
+    location: { lat: 47.3100, lon: -122.1900 }
+    firmware: { type: Repeater }
+  - name: "C31"
+    location: { lat: 47.3105, lon: -122.1905 }
+    firmware: { type: Companion }
+
+  - name: "R32"
+    location: { lat: 47.3200, lon: -122.1800 }
+    firmware: { type: Repeater }
+  - name: "C32"
+    location: { lat: 47.3205, lon: -122.1805 }
+    firmware: { type: Companion }
+
+  - name: "R33"
+    location: { lat: 47.3300, lon: -122.1700 }
+    firmware: { type: Repeater }
+  - name: "C33"
+    location: { lat: 47.3305, lon: -122.1705 }
+    firmware: { type: Companion }
+
+  - name: "R34"
+    location: { lat: 47.3400, lon: -122.1600 }
+    firmware: { type: Repeater }
+  - name: "C34"
+    location: { lat: 47.3405, lon: -122.1605 }
+    firmware: { type: Companion }
+
+  - name: "R35"
+    location: { lat: 47.3500, lon: -122.1500 }
+    firmware: { type: Repeater }
+  - name: "C35"
+    location: { lat: 47.3505, lon: -122.1505 }
+    firmware: { type: Companion }
+
+  - name: "R36"
+    location: { lat: 47.3600, lon: -122.1400 }
+    firmware: { type: Repeater }
+  - name: "C36"
+    location: { lat: 47.3605, lon: -122.1405 }
+    firmware: { type: Companion }
+
+  - name: "R37"
+    location: { lat: 47.3700, lon: -122.1300 }
+    firmware: { type: Repeater }
+  - name: "C37"
+    location: { lat: 47.3705, lon: -122.1305 }
+    firmware: { type: Companion }
+
+  - name: "R38"
+    location: { lat: 47.3800, lon: -122.1200 }
+    firmware: { type: Repeater }
+  - name: "C38"
+    location: { lat: 47.3805, lon: -122.1205 }
+    firmware: { type: Companion }
+
+  - name: "R39"
+    location: { lat: 47.3900, lon: -122.1100 }
+    firmware: { type: Repeater }
+  - name: "C39"
+    location: { lat: 47.3905, lon: -122.1105 }
+    firmware: { type: Companion }
+
+  - name: "R40"
+    location: { lat: 47.4000, lon: -122.1000 }
+    firmware: { type: Repeater }
+  - name: "C40"
+    location: { lat: 47.4005, lon: -122.1005 }
+    firmware: { type: Companion }
+
+  - name: "R41"
+    location: { lat: 47.4100, lon: -122.0900 }
+    firmware: { type: Repeater }
+  - name: "C41"
+    location: { lat: 47.4105, lon: -122.0905 }
+    firmware: { type: Companion }
+
+  - name: "R42"
+    location: { lat: 47.4200, lon: -122.0800 }
+    firmware: { type: Repeater }
+  - name: "C42"
+    location: { lat: 47.4205, lon: -122.0805 }
+    firmware: { type: Companion }
+
+  - name: "R43"
+    location: { lat: 47.4300, lon: -122.0700 }
+    firmware: { type: Repeater }
+  - name: "C43"
+    location: { lat: 47.4305, lon: -122.0705 }
+    firmware: { type: Companion }
+
+  - name: "R44"
+    location: { lat: 47.4400, lon: -122.0600 }
+    firmware: { type: Repeater }
+  - name: "C44"
+    location: { lat: 47.4405, lon: -122.0605 }
+    firmware: { type: Companion }
+
+  - name: "R45"
+    location: { lat: 47.4500, lon: -122.0500 }
+    firmware: { type: Repeater }
+  - name: "C45"
+    location: { lat: 47.4505, lon: -122.0505 }
+    firmware: { type: Companion }
+
+  - name: "R46"
+    location: { lat: 47.4600, lon: -122.0400 }
+    firmware: { type: Repeater }
+  - name: "C46"
+    location: { lat: 47.4605, lon: -122.0405 }
+    firmware: { type: Companion }
+
+  - name: "R47"
+    location: { lat: 47.4700, lon: -122.0300 }
+    firmware: { type: Repeater }
+  - name: "C47"
+    location: { lat: 47.4705, lon: -122.0305 }
+    firmware: { type: Companion }
+
+  - name: "R48"
+    location: { lat: 47.4800, lon: -122.0200 }
+    firmware: { type: Repeater }
+  - name: "C48"
+    location: { lat: 47.4805, lon: -122.0205 }
+    firmware: { type: Companion }
+
+  - name: "R49"
+    location: { lat: 47.4900, lon: -122.0100 }
+    firmware: { type: Repeater }
+  - name: "C49"
+    location: { lat: 47.4905, lon: -122.0105 }
+    firmware: { type: Companion }
+
+  - name: "R50"
+    location: { lat: 47.5000, lon: -122.0000 }
+    firmware: { type: Repeater }
+  - name: "C50"
+    location: { lat: 47.5005, lon: -122.0005 }
+    firmware: { type: Companion }
+
+  - name: "R51"
+    location: { lat: 47.5100, lon: -121.9900 }
+    firmware: { type: Repeater }
+  - name: "C51"
+    location: { lat: 47.5105, lon: -121.9905 }
+    firmware: { type: Companion }
+
+  - name: "R52"
+    location: { lat: 47.5200, lon: -121.9800 }
+    firmware: { type: Repeater }
+  - name: "C52"
+    location: { lat: 47.5205, lon: -121.9805 }
+    firmware: { type: Companion }
+
+  - name: "R53"
+    location: { lat: 47.5300, lon: -121.9700 }
+    firmware: { type: Repeater }
+  - name: "C53"
+    location: { lat: 47.5305, lon: -121.9705 }
+    firmware: { type: Companion }
+
+  - name: "R54"
+    location: { lat: 47.5400, lon: -121.9600 }
+    firmware: { type: Repeater }
+  - name: "C54"
+    location: { lat: 47.5405, lon: -121.9605 }
+    firmware: { type: Companion }
+
+  - name: "R55"
+    location: { lat: 47.5500, lon: -121.9500 }
+    firmware: { type: Repeater }
+  - name: "C55"
+    location: { lat: 47.5505, lon: -121.9505 }
+    firmware: { type: Companion }
+
+  - name: "R56"
+    location: { lat: 47.5600, lon: -121.9400 }
+    firmware: { type: Repeater }
+  - name: "C56"
+    location: { lat: 47.5605, lon: -121.9405 }
+    firmware: { type: Companion }
+
+  - name: "R57"
+    location: { lat: 47.5700, lon: -121.9300 }
+    firmware: { type: Repeater }
+  - name: "C57"
+    location: { lat: 47.5705, lon: -121.9305 }
+    firmware: { type: Companion }
+
+  - name: "R58"
+    location: { lat: 47.5800, lon: -121.9200 }
+    firmware: { type: Repeater }
+  - name: "C58"
+    location: { lat: 47.5805, lon: -121.9205 }
+    firmware: { type: Companion }
+
+  - name: "R59"
+    location: { lat: 47.5900, lon: -121.9100 }
+    firmware: { type: Repeater }
+  - name: "C59"
+    location: { lat: 47.5905, lon: -121.9105 }
+    firmware: { type: Companion }
+
+  - name: "R60"
+    location: { lat: 47.6000, lon: -121.9000 }
+    firmware: { type: Repeater }
+  - name: "C60"
+    location: { lat: 47.6005, lon: -121.9005 }
+    firmware: { type: Companion }
+
+  - name: "R61"
+    location: { lat: 47.6100, lon: -121.8900 }
+    firmware: { type: Repeater }
+  - name: "C61"
+    location: { lat: 47.6105, lon: -121.8905 }
+    firmware: { type: Companion }
+
+  - name: "R62"
+    location: { lat: 47.6200, lon: -121.8800 }
+    firmware: { type: Repeater }
+  - name: "C62"
+    location: { lat: 47.6205, lon: -121.8805 }
+    firmware: { type: Companion }
+
+  - name: "R63"
+    location: { lat: 47.6300, lon: -121.8700 }
+    firmware: { type: Repeater }
+  - name: "C63"
+    location: { lat: 47.6305, lon: -121.8705 }
+    firmware: { type: Companion }
+
+  - name: "R64"
+    location: { lat: 47.6400, lon: -121.8600 }
+    firmware: { type: Repeater }
+  - name: "C64"
+    location: { lat: 47.6405, lon: -121.8605 }
+    firmware: { type: Companion }
+
+  # Ending companion
+  - name: "Bob"
+    location:
+      lat: 47.6500
+      lon: -121.8500
+    firmware:
+      type: Companion
+
+edges:
+  # Start companion to R01
+  - from: "Alice"
+    to: "R01"
+    mean_snr_db_at20dbm: 15.0
+  - from: "R01"
+    to: "Alice"
+    mean_snr_db_at20dbm: 15.0
+
+  # R01 to C01
+  - from: "R01"
+    to: "C01"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C01"
+    to: "R01"
+    mean_snr_db_at20dbm: 20.0
+
+  # Repeater chain: R01 to R64
+  - from: "R01"
+    to: "R02"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R02"
+    to: "R01"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R02"
+    to: "C02"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C02"
+    to: "R02"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R02"
+    to: "R03"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R03"
+    to: "R02"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R03"
+    to: "C03"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C03"
+    to: "R03"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R03"
+    to: "R04"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R04"
+    to: "R03"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R04"
+    to: "C04"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C04"
+    to: "R04"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R04"
+    to: "R05"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R05"
+    to: "R04"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R05"
+    to: "C05"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C05"
+    to: "R05"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R05"
+    to: "R06"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R06"
+    to: "R05"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R06"
+    to: "C06"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C06"
+    to: "R06"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R06"
+    to: "R07"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R07"
+    to: "R06"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R07"
+    to: "C07"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C07"
+    to: "R07"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R07"
+    to: "R08"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R08"
+    to: "R07"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R08"
+    to: "C08"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C08"
+    to: "R08"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R08"
+    to: "R09"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R09"
+    to: "R08"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R09"
+    to: "C09"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C09"
+    to: "R09"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R09"
+    to: "R10"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R10"
+    to: "R09"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R10"
+    to: "C10"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C10"
+    to: "R10"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R10"
+    to: "R11"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R11"
+    to: "R10"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R11"
+    to: "C11"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C11"
+    to: "R11"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R11"
+    to: "R12"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R12"
+    to: "R11"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R12"
+    to: "C12"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C12"
+    to: "R12"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R12"
+    to: "R13"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R13"
+    to: "R12"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R13"
+    to: "C13"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C13"
+    to: "R13"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R13"
+    to: "R14"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R14"
+    to: "R13"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R14"
+    to: "C14"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C14"
+    to: "R14"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R14"
+    to: "R15"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R15"
+    to: "R14"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R15"
+    to: "C15"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C15"
+    to: "R15"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R15"
+    to: "R16"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R16"
+    to: "R15"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R16"
+    to: "C16"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C16"
+    to: "R16"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R16"
+    to: "R17"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R17"
+    to: "R16"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R17"
+    to: "C17"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C17"
+    to: "R17"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R17"
+    to: "R18"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R18"
+    to: "R17"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R18"
+    to: "C18"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C18"
+    to: "R18"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R18"
+    to: "R19"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R19"
+    to: "R18"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R19"
+    to: "C19"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C19"
+    to: "R19"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R19"
+    to: "R20"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R20"
+    to: "R19"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R20"
+    to: "C20"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C20"
+    to: "R20"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R20"
+    to: "R21"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R21"
+    to: "R20"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R21"
+    to: "C21"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C21"
+    to: "R21"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R21"
+    to: "R22"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R22"
+    to: "R21"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R22"
+    to: "C22"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C22"
+    to: "R22"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R22"
+    to: "R23"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R23"
+    to: "R22"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R23"
+    to: "C23"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C23"
+    to: "R23"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R23"
+    to: "R24"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R24"
+    to: "R23"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R24"
+    to: "C24"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C24"
+    to: "R24"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R24"
+    to: "R25"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R25"
+    to: "R24"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R25"
+    to: "C25"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C25"
+    to: "R25"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R25"
+    to: "R26"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R26"
+    to: "R25"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R26"
+    to: "C26"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C26"
+    to: "R26"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R26"
+    to: "R27"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R27"
+    to: "R26"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R27"
+    to: "C27"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C27"
+    to: "R27"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R27"
+    to: "R28"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R28"
+    to: "R27"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R28"
+    to: "C28"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C28"
+    to: "R28"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R28"
+    to: "R29"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R29"
+    to: "R28"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R29"
+    to: "C29"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C29"
+    to: "R29"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R29"
+    to: "R30"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R30"
+    to: "R29"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R30"
+    to: "C30"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C30"
+    to: "R30"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R30"
+    to: "R31"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R31"
+    to: "R30"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R31"
+    to: "C31"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C31"
+    to: "R31"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R31"
+    to: "R32"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R32"
+    to: "R31"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R32"
+    to: "C32"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C32"
+    to: "R32"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R32"
+    to: "R33"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R33"
+    to: "R32"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R33"
+    to: "C33"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C33"
+    to: "R33"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R33"
+    to: "R34"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R34"
+    to: "R33"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R34"
+    to: "C34"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C34"
+    to: "R34"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R34"
+    to: "R35"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R35"
+    to: "R34"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R35"
+    to: "C35"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C35"
+    to: "R35"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R35"
+    to: "R36"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R36"
+    to: "R35"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R36"
+    to: "C36"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C36"
+    to: "R36"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R36"
+    to: "R37"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R37"
+    to: "R36"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R37"
+    to: "C37"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C37"
+    to: "R37"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R37"
+    to: "R38"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R38"
+    to: "R37"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R38"
+    to: "C38"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C38"
+    to: "R38"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R38"
+    to: "R39"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R39"
+    to: "R38"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R39"
+    to: "C39"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C39"
+    to: "R39"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R39"
+    to: "R40"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R40"
+    to: "R39"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R40"
+    to: "C40"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C40"
+    to: "R40"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R40"
+    to: "R41"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R41"
+    to: "R40"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R41"
+    to: "C41"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C41"
+    to: "R41"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R41"
+    to: "R42"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R42"
+    to: "R41"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R42"
+    to: "C42"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C42"
+    to: "R42"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R42"
+    to: "R43"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R43"
+    to: "R42"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R43"
+    to: "C43"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C43"
+    to: "R43"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R43"
+    to: "R44"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R44"
+    to: "R43"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R44"
+    to: "C44"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C44"
+    to: "R44"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R44"
+    to: "R45"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R45"
+    to: "R44"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R45"
+    to: "C45"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C45"
+    to: "R45"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R45"
+    to: "R46"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R46"
+    to: "R45"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R46"
+    to: "C46"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C46"
+    to: "R46"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R46"
+    to: "R47"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R47"
+    to: "R46"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R47"
+    to: "C47"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C47"
+    to: "R47"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R47"
+    to: "R48"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R48"
+    to: "R47"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R48"
+    to: "C48"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C48"
+    to: "R48"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R48"
+    to: "R49"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R49"
+    to: "R48"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R49"
+    to: "C49"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C49"
+    to: "R49"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R49"
+    to: "R50"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R50"
+    to: "R49"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R50"
+    to: "C50"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C50"
+    to: "R50"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R50"
+    to: "R51"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R51"
+    to: "R50"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R51"
+    to: "C51"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C51"
+    to: "R51"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R51"
+    to: "R52"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R52"
+    to: "R51"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R52"
+    to: "C52"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C52"
+    to: "R52"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R52"
+    to: "R53"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R53"
+    to: "R52"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R53"
+    to: "C53"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C53"
+    to: "R53"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R53"
+    to: "R54"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R54"
+    to: "R53"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R54"
+    to: "C54"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C54"
+    to: "R54"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R54"
+    to: "R55"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R55"
+    to: "R54"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R55"
+    to: "C55"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C55"
+    to: "R55"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R55"
+    to: "R56"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R56"
+    to: "R55"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R56"
+    to: "C56"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C56"
+    to: "R56"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R56"
+    to: "R57"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R57"
+    to: "R56"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R57"
+    to: "C57"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C57"
+    to: "R57"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R57"
+    to: "R58"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R58"
+    to: "R57"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R58"
+    to: "C58"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C58"
+    to: "R58"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R58"
+    to: "R59"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R59"
+    to: "R58"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R59"
+    to: "C59"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C59"
+    to: "R59"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R59"
+    to: "R60"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R60"
+    to: "R59"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R60"
+    to: "C60"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C60"
+    to: "R60"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R60"
+    to: "R61"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R61"
+    to: "R60"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R61"
+    to: "C61"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C61"
+    to: "R61"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R61"
+    to: "R62"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R62"
+    to: "R61"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R62"
+    to: "C62"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C62"
+    to: "R62"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R62"
+    to: "R63"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R63"
+    to: "R62"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R63"
+    to: "C63"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C63"
+    to: "R63"
+    mean_snr_db_at20dbm: 20.0
+
+  - from: "R63"
+    to: "R64"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R64"
+    to: "R63"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R64"
+    to: "C64"
+    mean_snr_db_at20dbm: 20.0
+  - from: "C64"
+    to: "R64"
+    mean_snr_db_at20dbm: 20.0
+
+  # R64 to end companion
+  - from: "R64"
+    to: "Bob"
+    mean_snr_db_at20dbm: 15.0
+  - from: "Bob"
+    to: "R64"
+    mean_snr_db_at20dbm: 15.0

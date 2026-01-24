@@ -1,0 +1,14 @@
+[package]
+name = "mcsim-common"
+description = "Common types and traits for MCSim simulation"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+meshcore-packet.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true

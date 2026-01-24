@@ -1,0 +1,87 @@
+# Diamond Network
+# Two companions and two repeaters in a diamond configuration.
+#
+# Network topology:
+#          [Repeater1]
+#         /           \
+#   [Alice]           [Bob]
+#         \           /
+#          [Repeater2]
+#
+# Each repeater can see both companions, but the repeaters cannot see each other.
+# This tests path diversity and routing decisions.
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+
+nodes:
+  # Companions on left and right
+  - name: "Alice"
+    location:
+      lat: 47.6100
+      lon: -122.4000
+    firmware:
+      type: Companion
+
+  - name: "Bob"
+    location:
+      lat: 47.6100
+      lon: -122.3000
+    firmware:
+      type: Companion
+
+  # Repeaters on top and bottom
+  - name: "Repeater1"
+    location:
+      lat: 47.6200
+      lon: -122.3500
+    firmware:
+      type: Repeater
+
+  - name: "Repeater2"
+    location:
+      lat: 47.6000
+      lon: -122.3500
+    firmware:
+      type: Repeater
+
+edges:
+  # Alice <-> Repeater1 (top path)
+  - from: "Alice"
+    to: "Repeater1"
+    mean_snr_db_at20dbm: 12.0
+  - from: "Repeater1"
+    to: "Alice"
+    mean_snr_db_at20dbm: 12.0
+
+  # Repeater1 <-> Bob (top path)
+  - from: "Repeater1"
+    to: "Bob"
+    mean_snr_db_at20dbm: 12.0
+  - from: "Bob"
+    to: "Repeater1"
+    mean_snr_db_at20dbm: 12.0
+
+  # Alice <-> Repeater2 (bottom path)
+  - from: "Alice"
+    to: "Repeater2"
+    mean_snr_db_at20dbm: 10.0
+  - from: "Repeater2"
+    to: "Alice"
+    mean_snr_db_at20dbm: 10.0
+
+  # Repeater2 <-> Bob (bottom path)
+  - from: "Repeater2"
+    to: "Bob"
+    mean_snr_db_at20dbm: 10.0
+  - from: "Bob"
+    to: "Repeater2"
+    mean_snr_db_at20dbm: 10.0
+
+  # Note: No edge between Repeater1 and Repeater2 - they cannot hear each other

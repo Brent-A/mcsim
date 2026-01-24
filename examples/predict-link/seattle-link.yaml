@@ -1,0 +1,18 @@
+# Seattle radio config example
+#
+# Overrides spreading factor for longer range links.
+# Uses standard model format (simulation section).
+#
+# Usage:
+#   mcsim predict-link --config examples/predict-link/seattle-link.yaml 47.6062 -122.3321 47.6097 -122.3331
+#
+# Or combine with defaults:
+#   mcsim predict-link --config examples/predict-link/defaults.yaml \
+#                      --config examples/predict-link/seattle-link.yaml \
+#                      47.6062 -122.3321 47.6097 -122.3331
+
+simulation:
+  predict:
+    radio:
+      # Override spreading factor for longer range
+      spreading_factor: 9

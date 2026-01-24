@@ -1,0 +1,21 @@
+[package]
+name = "mcsim-agents"
+description = "Operator agent simulation for MCSim"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+meshcore-packet.workspace = true
+mcsim-common.workspace = true
+mcsim-companion-protocol.workspace = true
+mcsim-cli-protocol.workspace = true
+mcsim-metrics.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+rand_distr.workspace = true
+tracing.workspace = true
+sha2.workspace = true

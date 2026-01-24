@@ -1,0 +1,34 @@
+# Chatter Behavior Overlay
+# Use with any topology that has the Alice node.
+# Example: cargo run -- run examples/topologies/simple.yaml examples/behaviors/chatter.yaml
+#
+
+defaults:
+  node:
+    agent:
+      direct:
+        enabled: true
+        startup_s: 60
+        startup_jitter_s: 30
+      channel:
+        enabled: true
+        startup_s: 60
+        startup_jitter_s: 30
+        interval_s: 5
+        interval_jitter_s: 5
+        session_message_count: 5
+        session_interval_s: 300
+        session_interval_jitter_s: 60
+
+
+
+# # Configures Alice to send direct messages.
+
+# nodes:
+#   # Alice sends DMs to other companions
+#   - name: "Alice"
+#     agent:
+#       direct:
+#         enabled: true
+
+        

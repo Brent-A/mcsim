@@ -1,0 +1,12 @@
+# Single Broadcast Behavior
+# Alice sends exactly 1 channel message for deterministic testing.
+#
+# Use with topologies that have an Alice node.
+# Example: cargo run -- run examples/topologies/two_peers.yaml examples/behaviors/single_broadcast.yaml
+
+nodes:
+  - name: "Alice"
+    agent:
+      channel:
+        enabled: true
+        message_count: 1
