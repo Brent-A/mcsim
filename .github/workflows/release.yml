@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v0.1.0, v1.0.0, etc.
+  workflow_dispatch:  # Allow manual trigger
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.1.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows:
+    name: Build Windows Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Setup dependencies
+        run: |
+          # Download ITM dll and other dependencies including Rerun
+          .\scripts\setup_dependencies.ps1
+
+      - name: Create release package (with Rerun)
+        run: |
+          # Build with rerun feature and include rerun.exe
+          .\scripts\create_release.ps1 -ZipPackage
+
+      - name: Rename ZIP with version (full)
+        run: |
+          $version = "${{ github.ref_name }}"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $version = "${{ inputs.tag }}"
+          }
+          $existingZip = Get-ChildItem -Filter "mcsim-*.zip" | Select-Object -First 1
+          if ($existingZip) {
+            Rename-Item $existingZip.FullName "mcsim-$version-windows-x64-full.zip"
+          }
+
+      - name: Create minimal release package (without Rerun)
+        run: |
+          # Repackage without rerun.exe (reuses existing build)
+          .\scripts\create_release.ps1 -SkipBuild -SkipRerun -ZipPackage
+
+      - name: Rename ZIP with version (minimal)
+        run: |
+          $version = "${{ github.ref_name }}"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $version = "${{ inputs.tag }}"
+          }
+          $existingZip = Get-ChildItem -Filter "mcsim-*.zip" | Select-Object -First 1
+          if ($existingZip) {
+            Rename-Item $existingZip.FullName "mcsim-$version-windows-x64.zip"
+          }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcsim-windows-x64
+          path: mcsim-*-windows-x64*.zip
+          retention-days: 5
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: MCSim ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
