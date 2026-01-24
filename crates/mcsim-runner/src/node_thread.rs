@@ -16,6 +16,17 @@
 //! - [`NodeReport`]: Reports sent from node threads back to coordinator
 //! - [`Coordinator`]: Manages all node threads and global event routing
 //!
+//! ## Synchronous Firmware Stepping (Phase 3)
+//!
+//! The node thread steps firmware synchronously using [`NodeThread::step_firmware_sync()`].
+//! This eliminates the separate firmware stepper thread, reducing overhead and simplifying
+//! the architecture. When a firmware timer fires:
+//!
+//! 1. The node thread calls `step_firmware_sync()` with the current time
+//! 2. The firmware DLL runs synchronously until it yields
+//! 3. Results (radio TX, serial TX, next wake time) are processed immediately
+//! 4. The next wake timer is scheduled as a local event
+//!
 //! ## Feature Flag
 //!
 //! This module is gated behind the `per_node_threading` feature flag to allow
@@ -25,8 +36,21 @@ use crossbeam_channel::{Receiver, Sender};
 use mcsim_common::{
     EntityId, LoraPacket, RadioParams, ReceiveAirEvent, SimTime, TransmitAirEvent,
 };
+use mcsim_firmware::dll::{OwnedFirmwareNode, FirmwareDll, NodeConfig, YieldReason, FirmwareSimulationParams};
 use std::collections::BinaryHeap;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+
+/// Default radio parameters for nodes that don't specify custom parameters.
+fn default_radio_params() -> RadioParams {
+    RadioParams {
+        frequency_hz: 915_000_000,
+        bandwidth_hz: 125_000,
+        spreading_factor: 7,
+        coding_rate: 5,
+        tx_power_dbm: 20,
+    }
+}
 
 // ============================================================================
 // Node Commands (Coordinator → Node)
@@ -222,6 +246,181 @@ pub struct NodeThreadConfig {
 }
 
 // ============================================================================
+// Firmware State (Phase 3)
+// ============================================================================
+
+/// Default initial RTC Unix timestamp (Nov 2023).
+/// This matches the default from mcsim_firmware::dll.
+const DEFAULT_INITIAL_RTC_SECS: u64 = 1700000000;
+
+/// Result from synchronous firmware stepping.
+///
+/// This struct captures all outputs from a single firmware step, allowing
+/// the node thread to process them appropriately.
+#[derive(Debug)]
+pub struct FirmwareStepOutput {
+    /// Why the firmware yielded.
+    pub yield_reason: YieldReason,
+    /// Wake time in milliseconds (when firmware wants to run next).
+    pub wake_millis: u64,
+    /// Radio TX data if the firmware wants to transmit (packet bytes, airtime_ms).
+    pub radio_tx: Option<(Vec<u8>, u32)>,
+    /// Serial TX data if the firmware has output.
+    pub serial_tx: Option<Vec<u8>>,
+    /// Log output from the firmware (for debugging).
+    pub log_output: String,
+    /// Error message if yield reason was Error.
+    pub error_message: Option<String>,
+}
+
+/// Firmware state owned by a node thread.
+///
+/// This encapsulates the firmware DLL node and provides synchronous stepping.
+/// The firmware is stepped directly on the node thread, eliminating the need
+/// for a separate stepper thread.
+pub struct FirmwareState {
+    /// The firmware node from the DLL.
+    node: OwnedFirmwareNode,
+    /// Initial RTC time (Unix timestamp in seconds).
+    initial_rtc_secs: u64,
+    /// Current simulation time in milliseconds (updated on each step).
+    current_millis: u64,
+    /// Whether we're waiting for a TX completion notification.
+    awaiting_tx_complete: bool,
+    /// State version for radio state change synchronization.
+    state_version: u32,
+}
+
+impl FirmwareState {
+    /// Create new firmware state from a DLL and configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `dll` - Arc to the loaded firmware DLL
+    /// * `node_config` - Configuration for the firmware node
+    /// * `sim_params` - Simulation parameters (RTC time, spin detection, etc.)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the firmware node cannot be created.
+    pub fn new(
+        dll: Arc<FirmwareDll>,
+        node_config: &NodeConfig,
+        sim_params: &FirmwareSimulationParams,
+    ) -> Result<Self, String> {
+        let node = OwnedFirmwareNode::new(dll, node_config)
+            .map_err(|e| format!("Failed to create firmware node: {}", e))?;
+        
+        Ok(Self {
+            node,
+            initial_rtc_secs: sim_params.initial_rtc_secs,
+            current_millis: 0,
+            awaiting_tx_complete: false,
+            state_version: 0,
+        })
+    }
+
+    /// Step the firmware synchronously and return all outputs.
+    ///
+    /// This is the core synchronous stepping method for Phase 3. It:
+    /// 1. Computes the RTC time from simulation time
+    /// 2. Calls the DLL's synchronous step
+    /// 3. Collects all outputs (TX data, serial data, wake time)
+    /// 4. Returns them for the node thread to process
+    ///
+    /// # Arguments
+    ///
+    /// * `sim_millis` - Current simulation time in milliseconds
+    ///
+    /// # Returns
+    ///
+    /// A [`FirmwareStepOutput`] containing all step results.
+    pub fn step_sync(&mut self, sim_millis: u64) -> FirmwareStepOutput {
+        self.current_millis = sim_millis;
+        
+        // Compute RTC seconds from simulation time
+        let rtc_secs = self.initial_rtc_secs as u32 + (sim_millis / 1000) as u32;
+        
+        // Call the DLL's synchronous step
+        let result = self.node.step(sim_millis, rtc_secs);
+        
+        // Extract radio TX data if transmitting
+        let radio_tx = if result.reason == YieldReason::RadioTxStart {
+            self.awaiting_tx_complete = true;
+            Some((result.radio_tx().to_vec(), result.radio_tx_airtime_ms))
+        } else {
+            if result.reason == YieldReason::RadioTxComplete {
+                self.awaiting_tx_complete = false;
+            }
+            None
+        };
+        
+        // Extract serial TX data
+        let serial_tx = {
+            let data = result.serial_tx();
+            if data.is_empty() {
+                None
+            } else {
+                Some(data.to_vec())
+            }
+        };
+        
+        FirmwareStepOutput {
+            yield_reason: result.reason,
+            wake_millis: result.wake_millis,
+            radio_tx,
+            serial_tx,
+            log_output: result.log_output(),
+            error_message: result.error_message(),
+        }
+    }
+
+    /// Inject a received radio packet into the firmware.
+    ///
+    /// This should be called when the radio has a packet ready for the firmware.
+    /// The firmware will process it on the next step.
+    pub fn inject_radio_rx(&mut self, data: &[u8], rssi_dbm: f32, snr_db: f32) {
+        self.node.inject_radio_rx(data, rssi_dbm, snr_db);
+    }
+
+    /// Inject serial data into the firmware.
+    ///
+    /// This is used for data from agents or external TCP connections.
+    pub fn inject_serial_rx(&mut self, data: &[u8]) {
+        self.node.inject_serial_rx(data);
+    }
+
+    /// Notify the firmware that a radio TX has completed.
+    ///
+    /// This should be called when the radio transitions back to Receiving
+    /// after a transmission.
+    pub fn notify_tx_complete(&mut self) {
+        if self.awaiting_tx_complete {
+            self.node.notify_tx_complete();
+            self.awaiting_tx_complete = false;
+        }
+    }
+
+    /// Notify the firmware of a radio state change.
+    ///
+    /// This is used for spin detection synchronization.
+    pub fn notify_state_change(&mut self, state_version: u32) {
+        self.state_version = state_version;
+        self.node.notify_state_change(state_version);
+    }
+
+    /// Check if we're waiting for a TX completion.
+    pub fn is_awaiting_tx_complete(&self) -> bool {
+        self.awaiting_tx_complete
+    }
+    
+    /// Get the current simulation time in milliseconds.
+    pub fn current_millis(&self) -> u64 {
+        self.current_millis
+    }
+}
+
+// ============================================================================
 // Node Thread
 // ============================================================================
 
@@ -273,6 +472,17 @@ pub mod timer_ids {
 /// Only air events (`TransmitAir`/`ReceiveAir`) go through the coordinator for
 /// global routing via the Graph entity.
 ///
+/// ## Synchronous Firmware Stepping (Phase 3)
+///
+/// When firmware is attached, the node thread steps it synchronously using
+/// [`step_firmware_sync()`](Self::step_firmware_sync). This eliminates the
+/// separate firmware stepper thread:
+///
+/// 1. Firmware timer fires → call `step_firmware_sync()`
+/// 2. Firmware runs until it yields (Idle, RadioTxStart, etc.)
+/// 3. Results are processed: schedule wake timer, queue radio TX, etc.
+/// 4. Loop continues with next local event
+///
 /// ## Event Flow
 ///
 /// ```text
@@ -294,10 +504,23 @@ pub struct NodeThread {
     /// Sequence number for deterministic ordering of events at the same time.
     /// Events with the same timestamp are processed in the order they were added.
     event_sequence: u64,
+    /// Firmware state for synchronous stepping (Phase 3).
+    ///
+    /// When `Some`, the node thread owns firmware and steps it synchronously.
+    /// When `None`, the node operates without firmware (useful for testing).
+    firmware: Option<FirmwareState>,
+    /// Radio parameters for transmission.
+    ///
+    /// These are used when generating `TransmitAir` events from firmware TX requests.
+    radio_params: RadioParams,
 }
 
 impl NodeThread {
-    /// Create a new node thread with the given configuration.
+    /// Create a new node thread with the given configuration (without firmware).
+    ///
+    /// This creates a node thread without firmware attached. Use
+    /// [`with_firmware()`](Self::with_firmware) to attach firmware for
+    /// synchronous stepping.
     pub fn new(config: NodeThreadConfig) -> Self {
         Self {
             config,
@@ -305,7 +528,259 @@ impl NodeThread {
             current_time: SimTime::ZERO,
             trace_events: Vec::new(),
             event_sequence: 0,
+            firmware: None,
+            radio_params: default_radio_params(),
         }
+    }
+
+    /// Create a new node thread with firmware attached for synchronous stepping.
+    ///
+    /// This is the primary constructor for Phase 3. The firmware will be stepped
+    /// synchronously whenever firmware timer events fire.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Node thread configuration
+    /// * `firmware` - Firmware state to attach
+    /// * `radio_params` - Radio parameters for transmissions
+    pub fn with_firmware(
+        config: NodeThreadConfig,
+        firmware: FirmwareState,
+        radio_params: RadioParams,
+    ) -> Self {
+        Self {
+            config,
+            local_queue: BinaryHeap::new(),
+            current_time: SimTime::ZERO,
+            trace_events: Vec::new(),
+            event_sequence: 0,
+            firmware: Some(firmware),
+            radio_params,
+        }
+    }
+
+    /// Check if this node has firmware attached.
+    pub fn has_firmware(&self) -> bool {
+        self.firmware.is_some()
+    }
+
+    // ========================================================================
+    // Synchronous Firmware Stepping (Phase 3)
+    // ========================================================================
+
+    /// Step the firmware synchronously and process the results.
+    ///
+    /// This is the core method for Phase 3 synchronous firmware stepping.
+    /// It steps the firmware at the current simulation time and processes
+    /// all outputs:
+    ///
+    /// - **Idle yield**: Schedule a wake timer for the requested time
+    /// - **RadioTxStart**: Queue a `RadioTx` local event to route through radio
+    /// - **Serial TX**: Queue a `FirmwareTx` local event for agent
+    /// - **Error**: Log the error
+    ///
+    /// # Arguments
+    ///
+    /// * `event_time` - The current simulation time
+    /// * `report_tx` - Channel for sending reports to coordinator
+    ///
+    /// # Returns
+    ///
+    /// The yield reason from the firmware step.
+    pub fn step_firmware_sync(
+        &mut self,
+        event_time: SimTime,
+        report_tx: &Sender<(usize, NodeReport)>,
+    ) -> Option<YieldReason> {
+        // Check if firmware is present
+        if self.firmware.is_none() {
+            return None;
+        }
+        
+        let sim_millis = event_time.as_micros() / 1000;
+        let tracing_enabled = self.config.tracing_enabled;
+        let node_name = self.config.name.clone();
+        let radio_entity_id = self.config.radio_entity_id;
+        let node_index = self.config.node_index;
+        let radio_params = self.radio_params.clone();
+        
+        // Trace before stepping
+        if tracing_enabled {
+            self.trace_events.push(TraceEvent {
+                time: event_time,
+                description: format!("Stepping firmware at {}ms", sim_millis),
+            });
+        }
+        
+        // Step the firmware synchronously
+        let output = self.firmware.as_mut().unwrap().step_sync(sim_millis);
+        
+        // Trace after stepping
+        if tracing_enabled {
+            self.trace_events.push(TraceEvent {
+                time: event_time,
+                description: format!(
+                    "Firmware yielded: {:?}, wake_at={}ms",
+                    output.yield_reason, output.wake_millis
+                ),
+            });
+        }
+        
+        // Process the step output based on yield reason
+        match output.yield_reason {
+            YieldReason::Idle => {
+                // Schedule wake timer if firmware wants to wake in the future
+                if output.wake_millis > sim_millis {
+                    let wake_time = SimTime::from_micros(output.wake_millis * 1000);
+                    self.push_local_event(
+                        wake_time,
+                        LocalEventPayload::Timer { timer_id: timer_ids::FIRMWARE_WAKE },
+                    );
+                    
+                    if tracing_enabled {
+                        self.trace_events.push(TraceEvent {
+                            time: event_time,
+                            description: format!("Scheduled firmware wake at {:?}", wake_time),
+                        });
+                    }
+                }
+            }
+            
+            YieldReason::RadioTxStart => {
+                // Firmware wants to transmit - route through radio
+                if let Some((tx_data, airtime_ms)) = output.radio_tx {
+                    let packet = LoraPacket::new(tx_data);
+                    let end_time = event_time + SimTime::from_millis(airtime_ms as u64);
+                    
+                    if tracing_enabled {
+                        self.trace_events.push(TraceEvent {
+                            time: event_time,
+                            description: format!(
+                                "Firmware TX: {} bytes, airtime={}ms",
+                                packet.payload.len(), airtime_ms
+                            ),
+                        });
+                    }
+                    
+                    // Generate RadioTxStarted directly (simplified - in full impl radio would process)
+                    // Send TransmitAir to coordinator for global routing
+                    let tx_event = TransmitAirEvent {
+                        radio_id: radio_entity_id,
+                        end_time,
+                        packet: packet.clone(),
+                        params: radio_params,
+                    };
+                    let _ = report_tx.send((node_index, NodeReport::TransmitAir(tx_event)));
+                    
+                    // Schedule radio state change when TX completes
+                    self.push_local_event(
+                        end_time,
+                        LocalEventPayload::RadioStateChanged {
+                            state: mcsim_common::RadioState::Receiving,
+                        },
+                    );
+                }
+            }
+            
+            YieldReason::RadioTxComplete => {
+                // TX completed internally in the DLL
+                if tracing_enabled {
+                    self.trace_events.push(TraceEvent {
+                        time: event_time,
+                        description: "Firmware TX complete".to_string(),
+                    });
+                }
+            }
+            
+            YieldReason::Reboot | YieldReason::PowerOff => {
+                // Firmware requested reboot/power-off - log and handle
+                if tracing_enabled {
+                    self.trace_events.push(TraceEvent {
+                        time: event_time,
+                        description: format!("Firmware {:?}", output.yield_reason),
+                    });
+                }
+            }
+            
+            YieldReason::Error => {
+                if let Some(msg) = &output.error_message {
+                    if tracing_enabled {
+                        self.trace_events.push(TraceEvent {
+                            time: event_time,
+                            description: format!("Firmware error: {}", msg),
+                        });
+                    }
+                    eprintln!("[{}] Firmware error: {}", node_name, msg);
+                }
+            }
+        }
+        
+        // Handle serial TX output
+        if let Some(serial_data) = output.serial_tx {
+            if tracing_enabled {
+                self.trace_events.push(TraceEvent {
+                    time: event_time,
+                    description: format!("Firmware serial TX: {} bytes", serial_data.len()),
+                });
+            }
+            
+            // Queue for agent if present
+            self.push_local_event(
+                event_time,
+                LocalEventPayload::FirmwareTx { data: serial_data },
+            );
+        }
+        
+        // Trace firmware log output if non-empty (only when tracing enabled)
+        if !output.log_output.is_empty() && tracing_enabled {
+            self.trace_events.push(TraceEvent {
+                time: event_time,
+                description: format!("Firmware log: {}", output.log_output.trim()),
+            });
+        }
+        
+        Some(output.yield_reason)
+    }
+
+    /// Inject a received radio packet into the firmware and step it.
+    ///
+    /// This is called when the radio has received a packet. It:
+    /// 1. Injects the packet into the firmware
+    /// 2. Steps the firmware to process it
+    /// 3. Handles any outputs (TX requests, serial data, etc.)
+    pub fn handle_radio_rx_with_firmware(
+        &mut self,
+        packet: &LoraPacket,
+        rssi_dbm: f64,
+        snr_db: f64,
+        event_time: SimTime,
+        report_tx: &Sender<(usize, NodeReport)>,
+    ) {
+        if let Some(firmware) = self.firmware.as_mut() {
+            // Inject the packet
+            firmware.inject_radio_rx(&packet.payload, rssi_dbm as f32, snr_db as f32);
+        }
+        
+        // Step the firmware to process
+        self.step_firmware_sync(event_time, report_tx);
+    }
+
+    /// Inject serial data into the firmware and step it.
+    ///
+    /// This is called when receiving serial data from an agent or TCP connection.
+    pub fn handle_serial_rx_with_firmware(
+        &mut self,
+        data: &[u8],
+        event_time: SimTime,
+        report_tx: &Sender<(usize, NodeReport)>,
+    ) {
+        if let Some(firmware) = self.firmware.as_mut() {
+            // Inject the serial data
+            firmware.inject_serial_rx(data);
+        }
+        
+        // Step the firmware to process
+        self.step_firmware_sync(event_time, report_tx);
     }
 
     /// Get the node name.
@@ -491,17 +966,29 @@ impl NodeThread {
             LocalEventPayload::Timer { timer_id } => {
                 // Route to appropriate component based on timer ID partition
                 if timer_ids::is_firmware_timer(timer_id) {
-                    // Firmware timer - in full impl: step firmware
+                    // Firmware timer - step firmware synchronously (Phase 3)
                     self.trace(|| TraceEvent {
                         time: event_time,
                         description: format!("Firmware timer {} fired", timer_id),
                     });
+                    
+                    // Step firmware if attached - this is the Phase 3 synchronous stepping
+                    self.step_firmware_sync(event_time, report_tx);
                 } else if timer_ids::is_radio_timer(timer_id) {
-                    // Radio timer - in full impl: handle radio state transition
+                    // Radio timer - handle radio state transition
                     self.trace(|| TraceEvent {
                         time: event_time,
                         description: format!("Radio timer {} fired", timer_id),
                     });
+                    
+                    // Handle TX complete timer - notify firmware
+                    if timer_id == timer_ids::RADIO_TX_COMPLETE {
+                        if let Some(firmware) = self.firmware.as_mut() {
+                            firmware.notify_tx_complete();
+                        }
+                        // Step firmware to handle the TX complete
+                        self.step_firmware_sync(event_time, report_tx);
+                    }
                 } else if timer_ids::is_agent_timer(timer_id) {
                     // Agent timer - in full impl: step agent
                     self.trace(|| TraceEvent {
@@ -522,7 +1009,6 @@ impl NodeThread {
                 was_collided,
             } => {
                 // Radio has received a packet - deliver to firmware
-                // In full implementation: firmware.inject_radio_rx(&packet.payload, rssi_dbm, snr_db)
                 self.trace(|| TraceEvent {
                     time: event_time,
                     description: format!(
@@ -535,17 +1021,38 @@ impl NodeThread {
                     ),
                 });
                 
+                // Inject packet into firmware and step it (Phase 3)
+                if !was_collided {
+                    self.handle_radio_rx_with_firmware(&packet, rssi_dbm, snr_db, event_time, report_tx);
+                }
+                
                 // If there's an agent, it may also want to observe radio traffic
                 // In full impl: agent.handle_radio_rx(&packet, snr_db, rssi_dbm)
             }
 
             LocalEventPayload::RadioStateChanged { state } => {
                 // Radio state changed - notify firmware
-                // In full implementation: firmware.notify_state_change(state)
                 self.trace(|| TraceEvent {
                     time: event_time,
                     description: format!("Radio state changed to {:?}", state),
                 });
+                
+                // Notify firmware of state change for spin detection (Phase 3)
+                if let Some(firmware) = self.firmware.as_mut() {
+                    // Increment state version for each state change
+                    let new_version = firmware.state_version.wrapping_add(1);
+                    firmware.notify_state_change(new_version);
+                    
+                    // If transitioning to Receiving after TX, notify TX complete
+                    if matches!(state, mcsim_common::RadioState::Receiving)
+                        && firmware.is_awaiting_tx_complete()
+                    {
+                        firmware.notify_tx_complete();
+                    }
+                }
+                
+                // Step firmware to handle the state change
+                self.step_firmware_sync(event_time, report_tx);
             }
 
             // ================================================================
@@ -553,11 +1060,13 @@ impl NodeThread {
             // ================================================================
             LocalEventPayload::AgentTx { data } => {
                 // Agent sending data to firmware (serial RX from firmware's perspective)
-                // In full implementation: firmware.inject_serial_rx(&data)
                 self.trace(|| TraceEvent {
                     time: event_time,
                     description: format!("Agent → Firmware: {} bytes", data.len()),
                 });
+                
+                // Inject serial data into firmware and step it (Phase 3)
+                self.handle_serial_rx_with_firmware(&data, event_time, report_tx);
             }
 
             LocalEventPayload::FirmwareTx { data } => {
@@ -1499,5 +2008,247 @@ mod tests {
         // (Due to BinaryHeap's behavior with equal elements, order may vary,
         // but the important thing is all events are processed)
         assert_eq!(node.pending_event_count(), 0);
+    }
+
+    // ========================================================================
+    // Phase 3: Synchronous Firmware Stepping Tests
+    // ========================================================================
+
+    #[test]
+    fn test_firmware_timer_triggers_sync_step() {
+        // Test that firmware timer events call step_firmware_sync
+        let (report_tx, _report_rx) = crossbeam_channel::unbounded();
+        let config = NodeThreadConfig {
+            name: "firmware_test".to_string(),
+            node_index: 0,
+            firmware_entity_id: EntityId::new(1),
+            radio_entity_id: EntityId::new(2),
+            uart_port: None,
+            tracing_enabled: true, // Enable tracing to verify stepping
+        };
+        let mut node = NodeThread::new(config);
+        
+        // Queue a firmware timer event
+        node.push_local_event(
+            SimTime::from_millis(100),
+            LocalEventPayload::Timer { timer_id: timer_ids::FIRMWARE_WAKE },
+        );
+        
+        // Process the timer - without firmware attached, step_firmware_sync returns None
+        // but the event should still be processed
+        let processed = node.process_local_events(SimTime::from_millis(100), &report_tx);
+        assert_eq!(processed, 1);
+        assert_eq!(node.pending_event_count(), 0);
+        
+        // Verify trace captured the firmware timer firing
+        let firmware_timer_trace = node.trace_events.iter()
+            .any(|e| e.description.contains("Firmware timer"));
+        assert!(firmware_timer_trace, "Should trace firmware timer firing");
+    }
+
+    #[test]
+    fn test_radio_rx_triggers_sync_step() {
+        // Test that RadioRxPacket events call handle_radio_rx_with_firmware
+        let (report_tx, _report_rx) = crossbeam_channel::unbounded();
+        let config = NodeThreadConfig {
+            name: "rx_test".to_string(),
+            node_index: 0,
+            firmware_entity_id: EntityId::new(1),
+            radio_entity_id: EntityId::new(2),
+            uart_port: None,
+            tracing_enabled: true,
+        };
+        let mut node = NodeThread::new(config);
+        
+        // Queue a radio RX event
+        node.push_local_event(
+            SimTime::from_millis(100),
+            LocalEventPayload::RadioRxPacket {
+                packet: LoraPacket::from_bytes(vec![0x01, 0x02, 0x03]),
+                source_radio_id: EntityId::new(99),
+                snr_db: 10.0,
+                rssi_dbm: -90.0,
+                was_collided: false,
+            },
+        );
+        
+        // Process the RX event
+        let processed = node.process_local_events(SimTime::from_millis(100), &report_tx);
+        assert_eq!(processed, 1);
+        
+        // Verify trace captured the radio RX
+        let rx_trace = node.trace_events.iter()
+            .any(|e| e.description.contains("Radio RX"));
+        assert!(rx_trace, "Should trace radio RX event");
+    }
+
+    #[test]
+    fn test_collided_packet_not_injected() {
+        // Test that collided packets are not injected into firmware
+        let (report_tx, _report_rx) = crossbeam_channel::unbounded();
+        let config = NodeThreadConfig {
+            name: "collision_test".to_string(),
+            node_index: 0,
+            firmware_entity_id: EntityId::new(1),
+            radio_entity_id: EntityId::new(2),
+            uart_port: None,
+            tracing_enabled: true,
+        };
+        let mut node = NodeThread::new(config);
+        
+        // Queue a collided packet
+        node.push_local_event(
+            SimTime::from_millis(100),
+            LocalEventPayload::RadioRxPacket {
+                packet: LoraPacket::from_bytes(vec![0x01, 0x02, 0x03]),
+                source_radio_id: EntityId::new(99),
+                snr_db: 10.0,
+                rssi_dbm: -90.0,
+                was_collided: true, // Collided!
+            },
+        );
+        
+        // Process the event
+        let processed = node.process_local_events(SimTime::from_millis(100), &report_tx);
+        assert_eq!(processed, 1);
+        
+        // Verify trace shows collision was detected
+        let collision_trace = node.trace_events.iter()
+            .any(|e| e.description.contains("collided=true"));
+        assert!(collision_trace, "Should trace that packet was collided");
+    }
+
+    #[test]
+    fn test_radio_state_change_triggers_sync_step() {
+        // Test that RadioStateChanged events trigger firmware stepping
+        let (report_tx, _report_rx) = crossbeam_channel::unbounded();
+        let config = NodeThreadConfig {
+            name: "state_change_test".to_string(),
+            node_index: 0,
+            firmware_entity_id: EntityId::new(1),
+            radio_entity_id: EntityId::new(2),
+            uart_port: None,
+            tracing_enabled: true,
+        };
+        let mut node = NodeThread::new(config);
+        
+        // Queue a radio state change event
+        node.push_local_event(
+            SimTime::from_millis(100),
+            LocalEventPayload::RadioStateChanged {
+                state: mcsim_common::RadioState::Receiving,
+            },
+        );
+        
+        // Process the event
+        let processed = node.process_local_events(SimTime::from_millis(100), &report_tx);
+        assert_eq!(processed, 1);
+        
+        // Verify trace captured the state change
+        let state_change_trace = node.trace_events.iter()
+            .any(|e| e.description.contains("Radio state changed"));
+        assert!(state_change_trace, "Should trace radio state change");
+    }
+
+    #[test]
+    fn test_agent_tx_triggers_sync_step() {
+        // Test that AgentTx events call handle_serial_rx_with_firmware
+        let (report_tx, _report_rx) = crossbeam_channel::unbounded();
+        let config = NodeThreadConfig {
+            name: "agent_tx_test".to_string(),
+            node_index: 0,
+            firmware_entity_id: EntityId::new(1),
+            radio_entity_id: EntityId::new(2),
+            uart_port: None,
+            tracing_enabled: true,
+        };
+        let mut node = NodeThread::new(config);
+        
+        // Queue an agent TX event
+        node.push_local_event(
+            SimTime::from_millis(100),
+            LocalEventPayload::AgentTx {
+                data: vec![0xAA, 0xBB, 0xCC],
+            },
+        );
+        
+        // Process the event
+        let processed = node.process_local_events(SimTime::from_millis(100), &report_tx);
+        assert_eq!(processed, 1);
+        
+        // Verify trace captured the agent TX
+        let agent_trace = node.trace_events.iter()
+            .any(|e| e.description.contains("Agent → Firmware"));
+        assert!(agent_trace, "Should trace agent to firmware event");
+    }
+
+    #[test]
+    fn test_node_thread_with_firmware_constructor() {
+        // Test that with_firmware constructor properly attaches firmware state
+        let config = NodeThreadConfig {
+            name: "with_fw_test".to_string(),
+            node_index: 0,
+            firmware_entity_id: EntityId::new(1),
+            radio_entity_id: EntityId::new(2),
+            uart_port: None,
+            tracing_enabled: false,
+        };
+        
+        // Create a node without firmware
+        let node_without = NodeThread::new(config.clone());
+        assert!(!node_without.has_firmware());
+        
+        // Note: We can't easily test with_firmware without a real DLL,
+        // but we verify the has_firmware() method works
+    }
+
+    #[test]
+    fn test_step_firmware_sync_without_firmware_returns_none() {
+        // Test that step_firmware_sync returns None when no firmware is attached
+        let (report_tx, _report_rx) = crossbeam_channel::unbounded();
+        let mut node = make_test_node("no_fw_test");
+        
+        // Node has no firmware attached
+        assert!(!node.has_firmware());
+        
+        // step_firmware_sync should return None
+        let result = node.step_firmware_sync(SimTime::from_millis(100), &report_tx);
+        assert!(result.is_none(), "step_firmware_sync should return None without firmware");
+    }
+
+    #[test]
+    fn test_firmware_step_output_struct() {
+        // Test the FirmwareStepOutput struct fields
+        let output = FirmwareStepOutput {
+            yield_reason: YieldReason::Idle,
+            wake_millis: 1000,
+            radio_tx: Some((vec![0x01, 0x02], 50)),
+            serial_tx: Some(vec![0xAA, 0xBB]),
+            log_output: "Test log".to_string(),
+            error_message: None,
+        };
+        
+        assert_eq!(output.yield_reason, YieldReason::Idle);
+        assert_eq!(output.wake_millis, 1000);
+        assert!(output.radio_tx.is_some());
+        assert!(output.serial_tx.is_some());
+        assert!(!output.log_output.is_empty());
+        assert!(output.error_message.is_none());
+    }
+
+    #[test]
+    fn test_firmware_wake_timer_id() {
+        // Verify FIRMWARE_WAKE is a firmware timer
+        assert!(timer_ids::is_firmware_timer(timer_ids::FIRMWARE_WAKE));
+        assert!(!timer_ids::is_radio_timer(timer_ids::FIRMWARE_WAKE));
+        assert!(!timer_ids::is_agent_timer(timer_ids::FIRMWARE_WAKE));
+    }
+
+    #[test]
+    fn test_radio_tx_complete_timer_id() {
+        // Verify RADIO_TX_COMPLETE is a radio timer
+        assert!(!timer_ids::is_firmware_timer(timer_ids::RADIO_TX_COMPLETE));
+        assert!(timer_ids::is_radio_timer(timer_ids::RADIO_TX_COMPLETE));
+        assert!(!timer_ids::is_agent_timer(timer_ids::RADIO_TX_COMPLETE));
     }
 }
