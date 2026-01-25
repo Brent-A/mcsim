@@ -401,12 +401,30 @@ pub enum FirmwareType {
 }
 
 impl FirmwareType {
-    /// Get the DLL filename for this firmware type.
+    /// Get the library filename for this firmware type.
+    /// Returns .dll on Windows, .so on Linux, .dylib on macOS.
     pub fn dll_name(&self) -> &'static str {
         match self {
+            #[cfg(target_os = "windows")]
             FirmwareType::Repeater => "meshcore_repeater.dll",
+            #[cfg(target_os = "windows")]
             FirmwareType::RoomServer => "meshcore_room_server.dll",
+            #[cfg(target_os = "windows")]
             FirmwareType::Companion => "meshcore_companion.dll",
+
+            #[cfg(target_os = "linux")]
+            FirmwareType::Repeater => "libmeshcore_repeater.so",
+            #[cfg(target_os = "linux")]
+            FirmwareType::RoomServer => "libmeshcore_room_server.so",
+            #[cfg(target_os = "linux")]
+            FirmwareType::Companion => "libmeshcore_companion.so",
+
+            #[cfg(target_os = "macos")]
+            FirmwareType::Repeater => "libmeshcore_repeater.dylib",
+            #[cfg(target_os = "macos")]
+            FirmwareType::RoomServer => "libmeshcore_room_server.dylib",
+            #[cfg(target_os = "macos")]
+            FirmwareType::Companion => "libmeshcore_companion.dylib",
         }
     }
 }
@@ -951,12 +969,35 @@ mod tests {
 
     #[test]
     fn test_firmware_type_dll_names() {
-        assert_eq!(FirmwareType::Repeater.dll_name(), "meshcore_repeater.dll");
-        assert_eq!(
-            FirmwareType::RoomServer.dll_name(),
-            "meshcore_room_server.dll"
-        );
-        assert_eq!(FirmwareType::Companion.dll_name(), "meshcore_companion.dll");
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(FirmwareType::Repeater.dll_name(), "meshcore_repeater.dll");
+            assert_eq!(
+                FirmwareType::RoomServer.dll_name(),
+                "meshcore_room_server.dll"
+            );
+            assert_eq!(FirmwareType::Companion.dll_name(), "meshcore_companion.dll");
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(FirmwareType::Repeater.dll_name(), "libmeshcore_repeater.so");
+            assert_eq!(
+                FirmwareType::RoomServer.dll_name(),
+                "libmeshcore_room_server.so"
+            );
+            assert_eq!(FirmwareType::Companion.dll_name(), "libmeshcore_companion.so");
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(FirmwareType::Repeater.dll_name(), "libmeshcore_repeater.dylib");
+            assert_eq!(
+                FirmwareType::RoomServer.dll_name(),
+                "libmeshcore_room_server.dylib"
+            );
+            assert_eq!(FirmwareType::Companion.dll_name(), "libmeshcore_companion.dylib");
+        }
     }
 
     #[test]
