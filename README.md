@@ -71,7 +71,7 @@ MCSim is a simulation framework for [MeshCore](https://github.com/liamcottle/mes
 cargo run --release -- run examples/topologies/simple.yaml
 
 # With visualization
-cargo run --release -- run examples/topologies/simple.yaml --rerun
+cargo run --release --features rerun -- run examples/topologies/simple.yaml --rerun
 ```
 
 ### Run a Simulation with activity
