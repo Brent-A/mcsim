@@ -784,6 +784,9 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         }
     }
 
+    // Maximum number of contacts that can be synced to firmware
+    const MAX_AUTO_CONTACTS: usize = 100;
+
     // Second pass: create agent entities and initial events
     for (_, node_config) in &model.nodes {
         // Skip if no agent was allocated for this node
@@ -799,6 +802,35 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         let firmware_id = *node_name_to_firmware_id.get(&node_config.name).unwrap();
         let node_id = *node_name_to_node_id.get(&node_config.name).unwrap();
 
+        // Helper to build a prioritized, sorted, limited list of target nodes
+        // Priority: companions first, then other nodes, sorted by name for determinism
+        // Limit: MAX_AUTO_CONTACTS to avoid exceeding firmware capacity
+        let build_auto_target_list = |exclude_self: &str| -> Vec<String> {
+            let mut companions: Vec<String> = Vec::new();
+            let mut others: Vec<String> = Vec::new();
+            
+            for (name, fw_type) in &node_name_to_firmware_type {
+                if name == exclude_self {
+                    continue;
+                }
+                if fw_type == "companion" {
+                    companions.push(name.clone());
+                } else {
+                    others.push(name.clone());
+                }
+            }
+            
+            // Sort each group by name for deterministic ordering
+            companions.sort();
+            others.sort();
+            
+            // Combine: companions first, then others, limited to MAX_AUTO_CONTACTS
+            let mut result = companions;
+            result.extend(others);
+            result.truncate(MAX_AUTO_CONTACTS);
+            result
+        };
+
         // Build direct message config
         let direct_targets: Option<Vec<String>> = props.get(&AGENT_DIRECT_TARGETS);
         let direct_target_ids: Vec<NodeId> = match direct_targets {
@@ -806,10 +838,10 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                 .filter_map(|name| node_name_to_node_id.get(name).copied())
                 .collect(),
             None => {
-                // If null, use all other companion nodes
-                node_name_to_node_id.iter()
-                    .filter(|(name, _)| *name != &node_config.name)
-                    .map(|(_, id)| *id)
+                // If null, use prioritized list: companions first, sorted by name, max 100
+                build_auto_target_list(&node_config.name)
+                    .iter()
+                    .filter_map(|name| node_name_to_node_id.get(name).copied())
                     .collect()
             }
         };
@@ -839,15 +871,14 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                 })
                 .collect(),
             None => {
-                // If null, auto-populate with all direct message targets
-                // This ensures DMs can be sent without explicit contacts config
-                direct_target_ids.iter()
-                    .filter_map(|node_id| {
-                        // Find the name for this node ID
-                        node_name_to_node_id.iter()
-                            .find(|(_, id)| *id == node_id)
-                            .filter(|(name, _)| *name != &node_config.name) // Skip self
-                            .map(|(name, _)| make_contact(name, *node_id))
+                // If null, use the same prioritized list as direct targets
+                // This ensures contacts and DM targets are consistent
+                build_auto_target_list(&node_config.name)
+                    .iter()
+                    .filter_map(|name| {
+                        node_name_to_node_id.get(name).map(|node_id| {
+                            make_contact(name, *node_id)
+                        })
                     })
                     .collect()
             }
