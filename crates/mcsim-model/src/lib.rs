@@ -28,7 +28,7 @@ pub use properties::{
     PropertyType, PropertyBaseType, Property, FromPropertyValue,
     // Property constants
     RADIO_FREQUENCY_HZ, RADIO_BANDWIDTH_HZ, RADIO_SPREADING_FACTOR, RADIO_CODING_RATE, RADIO_TX_POWER_DBM,
-    COMPANION_CHANNELS, COMPANION_CONTACTS,
+    COMPANION_CHANNELS, COMPANION_CONTACTS, COMPANION_AUTO_CONTACTS_MAX,
     // Agent properties
     AGENT_DIRECT_ENABLED, AGENT_DIRECT_STARTUP_S, AGENT_DIRECT_STARTUP_JITTER_S, AGENT_DIRECT_TARGETS,
     AGENT_DIRECT_INTERVAL_S, AGENT_DIRECT_INTERVAL_JITTER_S, AGENT_DIRECT_ACK_TIMEOUT_S,
@@ -799,24 +799,38 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         let firmware_id = *node_name_to_firmware_id.get(&node_config.name).unwrap();
         let node_id = *node_name_to_node_id.get(&node_config.name).unwrap();
 
-        // Build direct message config
-        let direct_targets: Option<Vec<String>> = props.get(&AGENT_DIRECT_TARGETS);
-        let direct_target_ids: Vec<NodeId> = match direct_targets {
-            Some(names) => names.iter()
-                .filter_map(|name| node_name_to_node_id.get(name).copied())
-                .collect(),
-            None => {
-                // If null, use all other companion nodes
-                node_name_to_node_id.iter()
-                    .filter(|(name, _)| *name != &node_config.name)
-                    .map(|(_, id)| *id)
-                    .collect()
+        let auto_contacts_max: u32 = props.get(&COMPANION_AUTO_CONTACTS_MAX);
+
+        // Helper to build contact list when companion/contacts is null.
+        // We want as many repeaters/other nodes as possible (up to firmware capacity),
+        // but keep deterministic ordering: companions first, then others.
+        // Limit: auto_contacts_max to avoid exceeding firmware capacity.
+        let build_auto_contact_list = |exclude_self: &str| -> Vec<String> {
+            let mut companions: Vec<String> = Vec::new();
+            let mut others: Vec<String> = Vec::new();
+
+            for (name, fw_type) in &node_name_to_firmware_type {
+                if name == exclude_self {
+                    continue;
+                }
+                if fw_type == "companion" {
+                    companions.push(name.clone());
+                } else {
+                    others.push(name.clone());
+                }
             }
+
+            companions.sort();
+            others.sort();
+
+            let mut result = companions;
+            result.extend(others);
+            result.truncate(auto_contacts_max as usize);
+            result
         };
 
-        // Build contacts list from companion/contacts
+        // Build contacts list from companion/contacts FIRST
         // These are node names that will be resolved to their public keys
-        // Must do this before direct_target_ids is moved into direct_config
         // Note: Skip adding self as a contact (node shouldn't add itself)
         // 
         // Helper to create contact with correct type based on firmware type
@@ -829,26 +843,43 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         };
         
         let companion_contact_names: Option<Vec<String>> = props.get(&COMPANION_CONTACTS);
-        let contacts: Vec<mcsim_agents::ContactTarget> = match companion_contact_names {
+        
+        // Determine the resolved contact names (for use in DM target filtering)
+        let resolved_contact_names: Vec<String> = match &companion_contact_names {
             Some(names) => names.iter()
                 .filter(|name| *name != &node_config.name) // Skip self
-                .filter_map(|name| {
-                    node_name_to_node_id.get(name).map(|node_id| {
-                        make_contact(name, *node_id)
-                    })
-                })
+                .filter(|name| node_name_to_node_id.contains_key(*name)) // Only include valid nodes
+                .cloned()
                 .collect(),
             None => {
-                // If null, auto-populate with all direct message targets
-                // This ensures DMs can be sent without explicit contacts config
-                direct_target_ids.iter()
-                    .filter_map(|node_id| {
-                        // Find the name for this node ID
-                        node_name_to_node_id.iter()
-                            .find(|(_, id)| *id == node_id)
-                            .filter(|(name, _)| *name != &node_config.name) // Skip self
-                            .map(|(name, _)| make_contact(name, *node_id))
+                // If null, auto-populate contacts up to capacity (companions first, then others).
+                build_auto_contact_list(&node_config.name)
+            }
+        };
+        
+        let contacts: Vec<mcsim_agents::ContactTarget> = resolved_contact_names.iter()
+            .filter_map(|name| {
+                node_name_to_node_id.get(name).map(|node_id| make_contact(name, *node_id))
+            })
+            .collect();
+
+        // Build direct message config
+        // If agent/direct/targets is specified, use those nodes
+        // If agent/direct/targets is NULL, derive from contact list (companions only)
+        let direct_targets: Option<Vec<String>> = props.get(&AGENT_DIRECT_TARGETS);
+        let direct_target_ids: Vec<NodeId> = match direct_targets {
+            Some(names) => names.iter()
+                .filter_map(|name| node_name_to_node_id.get(name).copied())
+                .collect(),
+            None => {
+                // If null, derive DM targets from resolved contact list (companions only).
+                // This ensures we only DM nodes that are in our contact list.
+                resolved_contact_names.iter()
+                    .filter(|name| {
+                        // Only include companion nodes as DM targets
+                        node_name_to_firmware_type.get(*name).map(|t| t == "companion").unwrap_or(false)
                     })
+                    .filter_map(|name| node_name_to_node_id.get(name).copied())
                     .collect()
             }
         };

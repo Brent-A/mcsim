@@ -106,6 +106,7 @@ pub use definitions::{
     // Companion
     COMPANION_CHANNELS,
     COMPANION_CONTACTS,
+    COMPANION_AUTO_CONTACTS_MAX,
     // Firmware (Node scope)
     FIRMWARE_TYPE,
     FIRMWARE_UART_PORT,
