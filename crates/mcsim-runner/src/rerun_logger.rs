@@ -140,11 +140,12 @@ mod real_impl {
     /// Sanitize a node name for use in a rerun entity path.
     /// Rerun entity paths use `/` as a hierarchy separator, so we need to
     /// replace slashes and other problematic characters with underscores.
+    /// Whitespace also needs to be replaced to avoid rerun warnings.
     fn sanitize_for_entity_path(name: &str) -> String {
         name.chars()
             .map(|c| match c {
                 '/' | '\\' | '*' | '?' | '"' | '<' | '>' | '|' | ':' => '_',
-                c if c.is_control() => '_',
+                c if c.is_whitespace() || c.is_control() => '_',
                 c => c,
             })
             .collect()
