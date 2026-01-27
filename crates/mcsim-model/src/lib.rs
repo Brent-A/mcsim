@@ -799,24 +799,6 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         let firmware_id = *node_name_to_firmware_id.get(&node_config.name).unwrap();
         let node_id = *node_name_to_node_id.get(&node_config.name).unwrap();
 
-        // Helper to build DM target list when agent/direct/targets is null.
-        // DM targets should be companion devices only.
-        let build_auto_dm_target_list = |exclude_self: &str| -> Vec<String> {
-            let mut companions: Vec<String> = Vec::new();
-            for (name, fw_type) in &node_name_to_firmware_type {
-                if name == exclude_self {
-                    continue;
-                }
-                if fw_type == "companion" {
-                    companions.push(name.clone());
-                }
-            }
-
-            // Sort by name for deterministic ordering
-            companions.sort();
-            companions
-        };
-
         let auto_contacts_max: u32 = props.get(&COMPANION_AUTO_CONTACTS_MAX);
 
         // Helper to build contact list when companion/contacts is null.
@@ -847,24 +829,8 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
             result
         };
 
-        // Build direct message config
-        let direct_targets: Option<Vec<String>> = props.get(&AGENT_DIRECT_TARGETS);
-        let direct_target_ids: Vec<NodeId> = match direct_targets {
-            Some(names) => names.iter()
-                .filter_map(|name| node_name_to_node_id.get(name).copied())
-                .collect(),
-            None => {
-                // If null, auto-target companion devices only (deterministic ordering).
-                build_auto_dm_target_list(&node_config.name)
-                    .iter()
-                    .filter_map(|name| node_name_to_node_id.get(name).copied())
-                    .collect()
-            }
-        };
-
-        // Build contacts list from companion/contacts
+        // Build contacts list from companion/contacts FIRST
         // These are node names that will be resolved to their public keys
-        // Must do this before direct_target_ids is moved into direct_config
         // Note: Skip adding self as a contact (node shouldn't add itself)
         // 
         // Helper to create contact with correct type based on firmware type
@@ -877,23 +843,43 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         };
         
         let companion_contact_names: Option<Vec<String>> = props.get(&COMPANION_CONTACTS);
-        let contacts: Vec<mcsim_agents::ContactTarget> = match companion_contact_names {
+        
+        // Determine the resolved contact names (for use in DM target filtering)
+        let resolved_contact_names: Vec<String> = match &companion_contact_names {
             Some(names) => names.iter()
                 .filter(|name| *name != &node_config.name) // Skip self
-                .filter_map(|name| {
-                    node_name_to_node_id.get(name).map(|node_id| {
-                        make_contact(name, *node_id)
-                    })
-                })
+                .filter(|name| node_name_to_node_id.contains_key(*name)) // Only include valid nodes
+                .cloned()
                 .collect(),
             None => {
                 // If null, auto-populate contacts up to capacity (companions first, then others).
-                // This keeps DM targets companion-only while still learning about repeaters.
                 build_auto_contact_list(&node_config.name)
-                    .iter()
-                    .filter_map(|name| {
-                        node_name_to_node_id.get(name).map(|node_id| make_contact(name, *node_id))
+            }
+        };
+        
+        let contacts: Vec<mcsim_agents::ContactTarget> = resolved_contact_names.iter()
+            .filter_map(|name| {
+                node_name_to_node_id.get(name).map(|node_id| make_contact(name, *node_id))
+            })
+            .collect();
+
+        // Build direct message config
+        // If agent/direct/targets is specified, use those nodes
+        // If agent/direct/targets is NULL, derive from contact list (companions only)
+        let direct_targets: Option<Vec<String>> = props.get(&AGENT_DIRECT_TARGETS);
+        let direct_target_ids: Vec<NodeId> = match direct_targets {
+            Some(names) => names.iter()
+                .filter_map(|name| node_name_to_node_id.get(name).copied())
+                .collect(),
+            None => {
+                // If null, derive DM targets from resolved contact list (companions only).
+                // This ensures we only DM nodes that are in our contact list.
+                resolved_contact_names.iter()
+                    .filter(|name| {
+                        // Only include companion nodes as DM targets
+                        node_name_to_firmware_type.get(*name).map(|t| t == "companion").unwrap_or(false)
                     })
+                    .filter_map(|name| node_name_to_node_id.get(name).copied())
                     .collect()
             }
         };
