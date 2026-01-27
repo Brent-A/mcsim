@@ -179,6 +179,10 @@ struct SimContext {
         {
             std::lock_guard<std::mutex> lock(serial_tx_mutex);
             size_t copy_len = (std::min)(serial_tx_buffer.size(), sizeof(step_result.serial_tx_data));
+            if (serial_tx_buffer.size() > sizeof(step_result.serial_tx_data)) {
+                fprintf(stderr, "[WARN] Serial TX buffer overflow: %zu bytes exceeds max %zu, truncating\n",
+                        serial_tx_buffer.size(), sizeof(step_result.serial_tx_data));
+            }
             memcpy(step_result.serial_tx_data, serial_tx_buffer.data(), copy_len);
             step_result.serial_tx_len = copy_len;
             serial_tx_buffer.clear();
