@@ -197,6 +197,14 @@ pub const COMPANION_CONTACTS: Property<Option<Vec<String>>, NodeScope> = Propert
 )
 .with_type(PropertyType::new(PropertyBaseType::String).array());
 
+/// Maximum number of auto-populated contacts when companion/contacts is null.
+pub const COMPANION_AUTO_CONTACTS_MAX: Property<u32, NodeScope> = Property::new(
+    "companion/auto_contacts_max",
+    "Maximum number of auto-populated contacts when companion/contacts is null (companions first, then other nodes)",
+    PropertyDefault::Integer(100),
+)
+.with_unit("count");
+
 // ============================================================================
 // Messaging Properties (Node scope)
 // ============================================================================

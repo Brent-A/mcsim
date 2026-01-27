@@ -75,7 +75,7 @@ typedef enum {
 } SimYieldReason;
 
 #define SIM_MAX_RADIO_PACKET 256
-#define SIM_MAX_SERIAL_TX 4096
+#define SIM_MAX_SERIAL_TX 32768   // 32KB to handle large contact list responses (~151 bytes per contact)
 #define SIM_MAX_LOG_OUTPUT 4096
 
 typedef struct {

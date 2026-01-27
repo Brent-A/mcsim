@@ -30,7 +30,7 @@ use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 // ============================================================================
 // Configuration Types
@@ -949,26 +949,24 @@ impl Agent {
             }
             Response::ContactsStart { total_count } => {
                 if self.protocol_state == ProtocolState::QueryingContacts {
-                    debug!("Agent[{}]: Firmware reports {} contacts", self.config.name, total_count);
+                    info!("Agent[{}]: Firmware reports {} contacts in GetContacts response", self.config.name, total_count);
                 }
             }
             Response::Contact(contact) => {
                 if self.protocol_state == ProtocolState::QueryingContacts {
-                    ctx.tracer().log(TraceEvent::custom(
-                        Some(&self.config.name),
-                        self.id,
-                        ctx.time(),
-                        format!("Contact in firmware: '{}' type={} path_len={}",
-                            contact.name, contact.contact_type, contact.out_path_len),
-                    ));
+                    trace!("Agent[{}]: Contact in firmware: '{}' type={} path_len={}",
+                        self.config.name, contact.name, contact.contact_type, contact.out_path_len);
                 }
             }
             Response::EndOfContacts { most_recent_lastmod } => {
                 if self.protocol_state == ProtocolState::QueryingContacts {
-                    debug!("Agent[{}]: EndOfContacts (lastmod={}), going to Ready", 
+                    info!("Agent[{}]: EndOfContacts received (lastmod={}), going to Ready", 
                         self.config.name, most_recent_lastmod);
                     self.protocol_state = ProtocolState::Ready;
                     self.on_ready(ctx);
+                } else {
+                    warn!("Agent[{}]: Received EndOfContacts in unexpected state {:?}",
+                        self.config.name, self.protocol_state);
                 }
             }
             _ => {
@@ -1170,22 +1168,51 @@ impl Entity for Agent {
                 self.protocol_session.feed(&serial_event.data);
 
                 // Process all complete messages
-                while let Ok(Some(msg)) = self.protocol_session.try_decode() {
-                    match &msg {
-                        Message::Response(r) => ctx.tracer().log(TraceEvent::custom(
-                            Some(&self.config.name),
-                            self.id,
-                            ctx.time(),
-                            format!("Response: {:?}", std::mem::discriminant(r)),
-                        )),
-                        Message::Push(p) => ctx.tracer().log(TraceEvent::custom(
-                            Some(&self.config.name),
-                            self.id,
-                            ctx.time(),
-                            format!("Push: {:?}", p),
-                        )),
+                loop {
+                    match self.protocol_session.try_decode() {
+                        Ok(Some(msg)) => {
+                            match &msg {
+                                Message::Response(r) => ctx.tracer().log(TraceEvent::custom(
+                                    Some(&self.config.name),
+                                    self.id,
+                                    ctx.time(),
+                                    format!("Response: {:?}", std::mem::discriminant(r)),
+                                )),
+                                Message::Push(p) => ctx.tracer().log(TraceEvent::custom(
+                                    Some(&self.config.name),
+                                    self.id,
+                                    ctx.time(),
+                                    format!("Push: {:?}", p),
+                                )),
+                            }
+                            self.handle_message(msg, ctx);
+                        }
+                        Ok(None) => {
+                            // No more complete frames, need more data
+                            break;
+                        }
+                        Err(e) => {
+                            // Protocol decode error - log and reset session
+                            error!(
+                                "Agent[{}]: Protocol decode error: {}. Resetting session. \
+                                 State={:?}, data_len={}, first_bytes={:02x?}",
+                                self.config.name,
+                                e,
+                                self.protocol_state,
+                                serial_event.data.len(),
+                                &serial_event.data[..serial_event.data.len().min(32)]
+                            );
+                            ctx.tracer().log(TraceEvent::custom(
+                                Some(&self.config.name),
+                                self.id,
+                                ctx.time(),
+                                format!("PROTOCOL ERROR: {}", e),
+                            ));
+                            // Reset the protocol session to recover
+                            self.protocol_session.reset();
+                            break;
+                        }
                     }
-                    self.handle_message(msg, ctx);
                 }
             }
             _ => {}

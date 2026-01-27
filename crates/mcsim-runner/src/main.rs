@@ -24,6 +24,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 // ============================================================================
 // Constants
@@ -1375,6 +1376,16 @@ fn keygen_command(config: KeygenConfig) -> Result<(), RunnerError> {
 }
 
 fn main() -> Result<(), RunnerError> {
+    // Initialize tracing subscriber with RUST_LOG env filter
+    // Default to "warn" level if RUST_LOG is not set
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("warn"));
+    
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_writer(std::io::stderr))
+        .with(filter)
+        .init();
+
     let cli = Cli::parse();
     
     match cli.command {

@@ -51,8 +51,8 @@ pub const PUB_KEY_SIZE: usize = 32;
 pub const PRV_KEY_SIZE: usize = 64;
 /// Maximum radio packet size.
 pub const MAX_RADIO_PACKET: usize = 256;
-/// Maximum serial TX buffer size.
-pub const MAX_SERIAL_TX: usize = 4096;
+/// Maximum serial TX buffer size (must match SIM_MAX_SERIAL_TX in sim_api.h).
+pub const MAX_SERIAL_TX: usize = 32768;
 /// Maximum log output buffer size.
 pub const MAX_LOG_OUTPUT: usize = 4096;
 

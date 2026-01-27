@@ -28,6 +28,8 @@ nodes:
       lon: -122.4000
     firmware:
       type: Companion
+    keys:
+      public_key: 0A*
 
   - name: "Bob"
     location:
@@ -35,6 +37,8 @@ nodes:
       lon: -122.3000
     firmware:
       type: Companion
+    keys:
+      public_key: 0B*
 
   # Repeaters on top and bottom
   - name: "Repeater1"
@@ -43,6 +47,8 @@ nodes:
       lon: -122.3500
     firmware:
       type: Repeater
+    keys:
+      public_key: 01*
 
   - name: "Repeater2"
     location:
@@ -50,6 +56,8 @@ nodes:
       lon: -122.3500
     firmware:
       type: Repeater
+    keys:
+      public_key: 02*
 
 edges:
   # Alice <-> Repeater1 (top path)

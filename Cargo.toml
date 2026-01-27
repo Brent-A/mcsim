@@ -53,6 +53,7 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.0", features = ["derive"] }
 rerun = "0.28"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 metrics = "0.24"
 argmin = { version = "0.10", features = ["serde1"] }
 argmin-math = { version = "0.4", features = ["vec"] }

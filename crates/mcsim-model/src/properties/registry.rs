@@ -30,6 +30,7 @@ pub const ALL_PROPERTIES: &[&PropertyDef] = &[
     // Companion
     &COMPANION_CHANNELS.def,
     &COMPANION_CONTACTS.def,
+    &COMPANION_AUTO_CONTACTS_MAX.def,
     // Messaging
     &MESSAGING_FLOOD_ACK_TIMEOUT_S.def,
     &MESSAGING_DIRECT_ACK_TIMEOUT_PER_HOP_S.def,
