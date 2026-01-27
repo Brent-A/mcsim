@@ -28,7 +28,7 @@ pub use properties::{
     PropertyType, PropertyBaseType, Property, FromPropertyValue,
     // Property constants
     RADIO_FREQUENCY_HZ, RADIO_BANDWIDTH_HZ, RADIO_SPREADING_FACTOR, RADIO_CODING_RATE, RADIO_TX_POWER_DBM,
-    COMPANION_CHANNELS, COMPANION_CONTACTS,
+    COMPANION_CHANNELS, COMPANION_CONTACTS, COMPANION_AUTO_CONTACTS_MAX,
     // Agent properties
     AGENT_DIRECT_ENABLED, AGENT_DIRECT_STARTUP_S, AGENT_DIRECT_STARTUP_JITTER_S, AGENT_DIRECT_TARGETS,
     AGENT_DIRECT_INTERVAL_S, AGENT_DIRECT_INTERVAL_JITTER_S, AGENT_DIRECT_ACK_TIMEOUT_S,
@@ -784,9 +784,6 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         }
     }
 
-    // Maximum number of contacts that can be synced to firmware
-    const MAX_AUTO_CONTACTS: usize = 100;
-
     // Second pass: create agent entities and initial events
     for (_, node_config) in &model.nodes {
         // Skip if no agent was allocated for this node
@@ -802,13 +799,34 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         let firmware_id = *node_name_to_firmware_id.get(&node_config.name).unwrap();
         let node_id = *node_name_to_node_id.get(&node_config.name).unwrap();
 
-        // Helper to build a prioritized, sorted, limited list of target nodes
-        // Priority: companions first, then other nodes, sorted by name for determinism
-        // Limit: MAX_AUTO_CONTACTS to avoid exceeding firmware capacity
-        let build_auto_target_list = |exclude_self: &str| -> Vec<String> {
+        // Helper to build DM target list when agent/direct/targets is null.
+        // DM targets should be companion devices only.
+        let build_auto_dm_target_list = |exclude_self: &str| -> Vec<String> {
+            let mut companions: Vec<String> = Vec::new();
+            for (name, fw_type) in &node_name_to_firmware_type {
+                if name == exclude_self {
+                    continue;
+                }
+                if fw_type == "companion" {
+                    companions.push(name.clone());
+                }
+            }
+
+            // Sort by name for deterministic ordering
+            companions.sort();
+            companions
+        };
+
+        let auto_contacts_max: u32 = props.get(&COMPANION_AUTO_CONTACTS_MAX);
+
+        // Helper to build contact list when companion/contacts is null.
+        // We want as many repeaters/other nodes as possible (up to firmware capacity),
+        // but keep deterministic ordering: companions first, then others.
+        // Limit: auto_contacts_max to avoid exceeding firmware capacity.
+        let build_auto_contact_list = |exclude_self: &str| -> Vec<String> {
             let mut companions: Vec<String> = Vec::new();
             let mut others: Vec<String> = Vec::new();
-            
+
             for (name, fw_type) in &node_name_to_firmware_type {
                 if name == exclude_self {
                     continue;
@@ -819,15 +837,13 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                     others.push(name.clone());
                 }
             }
-            
-            // Sort each group by name for deterministic ordering
+
             companions.sort();
             others.sort();
-            
-            // Combine: companions first, then others, limited to MAX_AUTO_CONTACTS
+
             let mut result = companions;
             result.extend(others);
-            result.truncate(MAX_AUTO_CONTACTS);
+            result.truncate(auto_contacts_max as usize);
             result
         };
 
@@ -838,8 +854,8 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                 .filter_map(|name| node_name_to_node_id.get(name).copied())
                 .collect(),
             None => {
-                // If null, use prioritized list: companions first, sorted by name, max 100
-                build_auto_target_list(&node_config.name)
+                // If null, auto-target companion devices only (deterministic ordering).
+                build_auto_dm_target_list(&node_config.name)
                     .iter()
                     .filter_map(|name| node_name_to_node_id.get(name).copied())
                     .collect()
@@ -871,14 +887,12 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                 })
                 .collect(),
             None => {
-                // If null, use the same prioritized list as direct targets
-                // This ensures contacts and DM targets are consistent
-                build_auto_target_list(&node_config.name)
+                // If null, auto-populate contacts up to capacity (companions first, then others).
+                // This keeps DM targets companion-only while still learning about repeaters.
+                build_auto_contact_list(&node_config.name)
                     .iter()
                     .filter_map(|name| {
-                        node_name_to_node_id.get(name).map(|node_id| {
-                            make_contact(name, *node_id)
-                        })
+                        node_name_to_node_id.get(name).map(|node_id| make_contact(name, *node_id))
                     })
                     .collect()
             }
