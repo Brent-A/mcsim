@@ -16,6 +16,12 @@ use mcsim_runner::rerun_logger::{RerunLogger, VisLinkInfo, VisNodeInfo};
 use mcsim_runner::uart_server::SyncUartManager;
 use mcsim_runner::watchdog::Watchdog;
 use mcsim_runner::{EventLoop, ProgressInfo, RunnerError, SimulationStats, SimTime};
+use mcsim_runner::node_thread::{
+    Coordinator, NodeThreadConfig, firmware_type_from_node_type, 
+    load_firmware_dlls, firmware_state_from_node_info,
+};
+use mcsim_firmware::FirmwareSimulationParams;
+use mcsim_common::EntityId;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use mcsim_common::entity_tracer::{EntityTracer, EntityTracerConfig};
@@ -499,6 +505,12 @@ pub struct RunnerConfig {
     /// Overrides the metrics/warmup_s property from the model.
     #[arg(long, value_parser = parse_duration)]
     pub metrics_warmup: Option<f64>,
+
+    /// Use per-node threading mode (experimental).
+    /// Each node runs on its own thread with local event processing.
+    /// Requires --duration to be specified.
+    #[arg(long)]
+    pub threaded: bool,
 }
 
 // ============================================================================
@@ -1053,6 +1065,182 @@ pub fn run_simulation(config: RunnerConfig) -> Result<SimulationStats, RunnerErr
 }
 
 // ============================================================================
+// Per-Node Threading Mode
+// ============================================================================
+
+/// Run a simulation using per-node threading (Coordinator architecture).
+///
+/// This is an alternative to `run_simulation` that uses the per-node threading
+/// architecture where each node runs on its own thread with local event processing.
+///
+/// Key differences from EventLoop:
+/// - Each node runs firmware synchronously on its own thread
+/// - Local events (firmware timers, radio turnarounds) are processed without global synchronization
+/// - Only air transmissions require coordinator involvement
+/// - Wake time coalescing reduces global synchronization overhead
+///
+/// # Arguments
+/// * `config` - Runner configuration (same as for run_simulation)
+///
+/// # Returns
+/// Simulation statistics on success.
+pub fn run_simulation_threaded(config: RunnerConfig) -> Result<SimulationStats, RunnerError> {
+    // Load and merge model(s)
+    let model = if config.models.len() == 1 {
+        load_model(&config.models[0])?
+    } else {
+        let paths: Vec<&Path> = config.models.iter().map(|p| p.as_path()).collect();
+        mcsim_model::load_models(&paths)?
+    };
+
+    if config.verbose {
+        eprintln!("Loaded model with {} nodes from {} file(s)", model.nodes().len(), config.models.len());
+    }
+
+    // Generate seed if not provided
+    let seed = config.seed.unwrap_or_else(|| {
+        use rand::Rng;
+        rand::thread_rng().gen()
+    });
+
+    if config.verbose {
+        eprintln!("Using seed: {}", seed);
+        eprintln!("Using per-node threading mode (Coordinator)");
+    }
+
+    // Build simulation
+    let simulation = build_simulation(&model, seed)?;
+
+    if config.verbose {
+        eprintln!(
+            "Built simulation with {} nodes",
+            simulation.node_infos.len()
+        );
+    }
+
+    // Get firmware simulation parameters from model
+    let sim_props = model.simulation_properties();
+    let firmware_sim_params = FirmwareSimulationParams {
+        spin_detection_threshold: sim_props.get(&mcsim_model::FIRMWARE_SPIN_DETECTION_THRESHOLD),
+        idle_loops_before_yield: sim_props.get(&mcsim_model::FIRMWARE_IDLE_LOOPS_BEFORE_YIELD),
+        log_spin_detection: sim_props.get(&mcsim_model::FIRMWARE_LOG_SPIN_DETECTION),
+        log_loop_iterations: sim_props.get(&mcsim_model::FIRMWARE_LOG_LOOP_ITERATIONS),
+        initial_rtc_secs: sim_props.get(&mcsim_model::FIRMWARE_INITIAL_RTC_SECS),
+        startup_time_us: 0, // Per-node startup times are in NodeInfo
+    };
+
+    // Load firmware DLLs
+    let dlls = load_firmware_dlls(&simulation.node_infos)
+        .map_err(|e| RunnerError::ConfigError(e))?;
+    
+    if config.verbose {
+        eprintln!("Loaded {} firmware DLL type(s)", dlls.len());
+    }
+
+    // Create coordinator from simulation (note: we need to save node_infos separately
+    // since from_simulation takes ownership)
+    let node_infos = simulation.node_infos.clone();
+    let mut coordinator = Coordinator::from_simulation(simulation);
+
+    // Create and add nodes with firmware
+    for (node_index, node_info) in node_infos.iter().enumerate() {
+        let fw_type = firmware_type_from_node_type(&node_info.node_type)
+            .ok_or_else(|| RunnerError::ConfigError(
+                format!("Unknown firmware type: {}", node_info.node_type)
+            ))?;
+        
+        let dll = dlls.get(&fw_type)
+            .ok_or_else(|| RunnerError::ConfigError(
+                format!("DLL not loaded for type: {:?}", fw_type)
+            ))?
+            .clone();
+        
+        let firmware_state = firmware_state_from_node_info(node_info, dll, &firmware_sim_params)
+            .map_err(|e| RunnerError::ConfigError(e))?;
+        
+        let node_config = NodeThreadConfig {
+            name: node_info.name.clone(),
+            node_index,
+            firmware_entity_id: EntityId::new(node_info.firmware_entity_id),
+            radio_entity_id: EntityId::new(node_info.radio_entity_id),
+            uart_port: node_info.uart_port,
+            tracing_enabled: config.trace.is_some(),
+        };
+        
+        // Wake time is startup time + 10ms (matches EventLoop initial timer events)
+        let wake_time = node_info.firmware_startup_time + SimTime::from_millis(10);
+        
+        // Use agent config if present
+        coordinator.add_node_with_firmware_and_agent(
+            node_config,
+            firmware_state,
+            node_info.radio_params.clone(),
+            wake_time,
+            node_info.agent_config.clone(),
+        );
+    }
+
+    if config.verbose {
+        let agents_count = node_infos.iter().filter(|n| n.agent_config.is_some()).count();
+        eprintln!("Created {} node threads ({} with agents)", node_infos.len(), agents_count);
+    }
+
+    // Run the simulation
+    let duration = config.duration.ok_or_else(|| {
+        RunnerError::ConfigError("Duration is required for per-node threading mode".to_string())
+    })?;
+    let duration_time = SimTime::from_secs(duration);
+
+    eprintln!("⏱  Running threaded simulation for {} seconds...", duration);
+
+    let start_time = std::time::Instant::now();
+    
+    coordinator.run_with_progress(
+        duration_time,
+        SimTime::from_secs(duration / 10.0), // Progress every 10%
+        |current_time, stats| {
+            let progress = (current_time.as_secs_f64() / duration) * 100.0;
+            eprintln!(
+                "  [{:5.1}%] sim: {:.1}s | advancements: {} | coalesce_events: {}",
+                progress,
+                current_time.as_secs_f64(),
+                stats.total_advances,
+                stats.coalesce_events,
+            );
+        },
+    ).map_err(|e| RunnerError::ConfigError(e))?;
+
+    let wall_time = start_time.elapsed();
+
+    // Get coordinator stats (clone before shutdown consumes coordinator)
+    let coord_stats = coordinator.stats().clone();
+    let stats = SimulationStats {
+        total_events: coord_stats.total_advances, // Approximate
+        packets_transmitted: coord_stats.packets_transmitted,
+        packets_received: coord_stats.packets_received,
+        packets_collided: 0,
+        messages_sent: 0,
+        messages_acked: 0,
+        simulation_time_us: (duration * 1_000_000.0) as u64,
+        wall_time_ms: wall_time.as_millis() as u64,
+    };
+
+    // Shutdown coordinator
+    coordinator.shutdown()
+        .map_err(|e| RunnerError::ConfigError(e))?;
+
+    eprintln!("\n✓ Simulation complete!");
+    eprintln!("  Time advancements: {}", coord_stats.total_advances);
+    eprintln!("  Total node steps: {}", coord_stats.total_node_steps);
+    eprintln!("  Packets TX: {}", coord_stats.packets_transmitted);
+    eprintln!("  Packets RX: {}", coord_stats.packets_received);
+    eprintln!("  Coalesce events: {}", coord_stats.coalesce_events);
+    eprintln!("  Wall time: {:.2}s", wall_time.as_secs_f64());
+
+    Ok(stats)
+}
+
+// ============================================================================
 // Link Prediction
 // ============================================================================
 
@@ -1391,7 +1579,13 @@ fn main() -> Result<(), RunnerError> {
     match cli.command {
         Commands::Run(config) => {
             let metrics_output = config.metrics_output;
-            let stats = run_simulation(config)?;
+            let use_threaded = config.threaded;
+            
+            let stats = if use_threaded {
+                run_simulation_threaded(config)?
+            } else {
+                run_simulation(config)?
+            };
 
             // Output stats as JSON to stdout only if not exporting metrics to stdout
             if metrics_output.is_none() {
@@ -1590,6 +1784,7 @@ mod tests {
             break_at_event: None,
             watchdog_timeout: DEFAULT_WATCHDOG_TIMEOUT_S,
             metrics_warmup: None,
+            threaded: false,
         };
         assert_eq!(config.duration, Some(3600.0));
     }
@@ -1614,6 +1809,7 @@ mod tests {
             break_at_event: None,
             watchdog_timeout: DEFAULT_WATCHDOG_TIMEOUT_S,
             metrics_warmup: None,
+            threaded: false,
         };
         assert!(config.duration.is_none());
     }
@@ -1638,6 +1834,7 @@ mod tests {
             break_at_event: None,
             watchdog_timeout: DEFAULT_WATCHDOG_TIMEOUT_S,
             metrics_warmup: None,
+            threaded: false,
         };
         assert_eq!(config.speed, 2.0);
         assert_eq!(config.max_catchup_ms, 200);
@@ -1663,6 +1860,7 @@ mod tests {
             break_at_event: None,
             watchdog_timeout: DEFAULT_WATCHDOG_TIMEOUT_S,
             metrics_warmup: None,
+            threaded: false,
         };
         assert!(config.metrics_output.is_some());
         assert!(config.metrics_file.is_some());
@@ -1691,6 +1889,7 @@ mod tests {
             break_at_event: None,
             watchdog_timeout: DEFAULT_WATCHDOG_TIMEOUT_S,
             metrics_warmup: None,
+            threaded: false,
         };
         assert_eq!(config.models.len(), 2);
     }

@@ -35,8 +35,7 @@ pub mod rerun_logger;
 pub mod uart_server;
 pub mod watchdog;
 
-// Per-node threading infrastructure (Phase 1 of threading refactor)
-#[cfg(feature = "per_node_threading")]
+// Per-node threading infrastructure
 pub mod node_thread;
 
 use mcsim_common::entity_tracer::EntityTracer;

@@ -6,7 +6,7 @@
 //! ## Running the benchmarks
 //!
 //! ```bash
-//! cargo bench --features per_node_threading -p mcsim-runner
+//! cargo bench -p mcsim-runner
 //! ```
 //!
 //! ## Benchmarks included
@@ -17,16 +17,13 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
-#[cfg(feature = "per_node_threading")]
 use mcsim_common::{EntityId, SimTime};
 
-#[cfg(feature = "per_node_threading")]
 use mcsim_runner::node_thread::{
     coalesce_wake_times, CoalesceConfig, Coordinator, NodeThreadConfig, DEFAULT_COALESCE_THRESHOLD_US,
 };
 
 /// Benchmark coordinator creation and node addition.
-#[cfg(feature = "per_node_threading")]
 fn bench_coordinator_creation(c: &mut Criterion) {
     let mut group = c.benchmark_group("coordinator_creation");
     
@@ -62,7 +59,6 @@ fn bench_coordinator_creation(c: &mut Criterion) {
 }
 
 /// Benchmark parallel time advancement with different node counts.
-#[cfg(feature = "per_node_threading")]
 fn bench_parallel_advancement(c: &mut Criterion) {
     let mut group = c.benchmark_group("parallel_advancement");
     group.sample_size(20); // Reduce sample size due to thread overhead
@@ -105,7 +101,6 @@ fn bench_parallel_advancement(c: &mut Criterion) {
 }
 
 /// Benchmark wake time coalescing with different input sizes.
-#[cfg(feature = "per_node_threading")]
 fn bench_coalesce_wake_times(c: &mut Criterion) {
     let mut group = c.benchmark_group("coalesce_wake_times");
     
@@ -171,7 +166,6 @@ fn bench_coalesce_wake_times(c: &mut Criterion) {
 }
 
 /// Benchmark coordinator run with different node counts.
-#[cfg(feature = "per_node_threading")]
 fn bench_coordinator_run(c: &mut Criterion) {
     let mut group = c.benchmark_group("coordinator_run");
     group.sample_size(10); // Reduce sample size due to longer runtime
@@ -215,7 +209,6 @@ fn bench_coordinator_run(c: &mut Criterion) {
 }
 
 /// Benchmark coalescing config impact.
-#[cfg(feature = "per_node_threading")]
 fn bench_coalescing_impact(c: &mut Criterion) {
     let mut group = c.benchmark_group("coalescing_impact");
     group.sample_size(10);
@@ -283,32 +276,6 @@ fn bench_coalescing_impact(c: &mut Criterion) {
     });
     
     group.finish();
-}
-
-// Dummy benchmarks when feature is not enabled
-#[cfg(not(feature = "per_node_threading"))]
-fn bench_coordinator_creation(_c: &mut Criterion) {
-    // Feature not enabled, skip benchmark
-}
-
-#[cfg(not(feature = "per_node_threading"))]
-fn bench_parallel_advancement(_c: &mut Criterion) {
-    // Feature not enabled, skip benchmark
-}
-
-#[cfg(not(feature = "per_node_threading"))]
-fn bench_coalesce_wake_times(_c: &mut Criterion) {
-    // Feature not enabled, skip benchmark
-}
-
-#[cfg(not(feature = "per_node_threading"))]
-fn bench_coordinator_run(_c: &mut Criterion) {
-    // Feature not enabled, skip benchmark
-}
-
-#[cfg(not(feature = "per_node_threading"))]
-fn bench_coalescing_impact(_c: &mut Criterion) {
-    // Feature not enabled, skip benchmark
 }
 
 criterion_group!(

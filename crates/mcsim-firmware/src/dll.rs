@@ -390,7 +390,7 @@ type FnSimFsRemove = unsafe extern "C" fn(SimNodeHandle, *const c_char) -> i32;
 // ============================================================================
 
 /// Available firmware types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FirmwareType {
     /// Simple repeater node.
     Repeater,

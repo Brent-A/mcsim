@@ -17,8 +17,6 @@ path = "src/main.rs"
 [features]
 default = []
 rerun = ["dep:rerun"]
-# Per-node threading infrastructure (Phase 1 of threading refactor)
-per_node_threading = []
 
 [dependencies]
 meshcore-packet.workspace = true
@@ -30,6 +28,8 @@ mcsim-firmware.workspace = true
 mcsim-dem.workspace = true
 mcsim-itm.workspace = true
 mcsim-link.workspace = true
+mcsim-agents.workspace = true
+mcsim-companion-protocol.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -48,10 +48,12 @@ parking_lot = "0.12"
 rayon = "1.10"
 memory-stats = "1.2"
 crossbeam-channel = "0.5"
+sha2 = "0.10"
 
 [dev-dependencies]
 serial_test = "3.0"
 criterion = { version = "0.5", features = ["html_reports"] }
+mcsim-companion-protocol.workspace = true
 
 [[bench]]
 name = "threading_benchmark"

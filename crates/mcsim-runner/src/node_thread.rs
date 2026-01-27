@@ -37,18 +37,15 @@
 //!    commands and TCP data
 //! 3. TCP data arrival is non-deterministic (external timing) - it triggers immediate
 //!    firmware stepping without affecting the deterministic simulation clock
-//!
-//! ## Feature Flag
-//!
-//! This module is gated behind the `per_node_threading` feature flag to allow
-//! incremental migration from the existing [`EventLoop`](crate::EventLoop).
 
 use crossbeam_channel::{Receiver, Sender, select};
 use mcsim_common::{
-    EntityId, LoraPacket, RadioParams, ReceiveAirEvent, SimTime, TransmitAirEvent,
+    EntityId, LoraPacket, NodeId, RadioParams, ReceiveAirEvent, SimTime, TransmitAirEvent,
 };
 use mcsim_firmware::dll::{OwnedFirmwareNode, FirmwareDll, NodeConfig, YieldReason, FirmwareSimulationParams};
-use std::collections::BinaryHeap;
+use mcsim_lora::LinkModel;
+use mcsim_model::{BuiltSimulation, NodeInfo};
+use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
@@ -531,6 +528,561 @@ impl FirmwareState {
 }
 
 // ============================================================================
+// Synchronous Agent State
+// ============================================================================
+
+use mcsim_agents::{AgentConfig, ChannelTarget};
+use mcsim_companion_protocol::{
+    Command, ChannelInfo, ContactInfo, Message, ProtocolSession, Response, 
+    PublicKey, PublicKeyPrefix, TextType,
+};
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+
+/// State for agent protocol initialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentProtocolState {
+    /// Not yet started.
+    Uninitialized,
+    /// Sent DeviceQuery, waiting for DeviceInfo.
+    AwaitingDeviceInfo,
+    /// Sent AppStart, waiting for SelfInfo.
+    AwaitingAppStart,
+    /// Setting up channels.
+    SettingUpChannels,
+    /// Setting up contacts.
+    SettingUpContacts,
+    /// Ready to send messages.
+    Ready,
+}
+
+/// Synchronous agent state for per-node threading.
+///
+/// This is a simplified agent that handles protocol initialization and
+/// message sending without requiring the full async event machinery.
+pub struct SyncAgentState {
+    /// Agent configuration.
+    config: AgentConfig,
+    /// Node ID this agent is attached to.
+    attached_node: NodeId,
+    /// Protocol session for encoding/decoding.
+    protocol_session: ProtocolSession,
+    /// Current protocol state.
+    protocol_state: AgentProtocolState,
+    /// Number of channels already set up.
+    channels_setup: usize,
+    /// Number of contacts already set up.
+    contacts_setup: usize,
+    /// Next scheduled action time (millis).
+    next_action_time: Option<u64>,
+    /// Index in direct message targets.
+    direct_target_idx: usize,
+    /// Direct messages sent count.
+    direct_messages_sent: u32,
+    /// Index in channel targets.
+    channel_target_idx: usize,
+    /// Channel messages sent count.
+    channel_messages_sent: u32,
+    /// Message sequence number.
+    message_seq: u32,
+    /// RNG for generating random content.
+    rng: ChaCha8Rng,
+    /// Whether direct messaging is active.
+    direct_active: bool,
+    /// Whether channel messaging is active.
+    channel_active: bool,
+    /// Startup time for this agent (millis).
+    startup_time_millis: u64,
+}
+
+impl SyncAgentState {
+    /// Create a new synchronous agent state.
+    ///
+    /// # Arguments
+    /// * `config` - Agent configuration
+    /// * `attached_node` - Node ID this agent is attached to
+    /// * `startup_time_millis` - When to start the agent (firmware startup + 1 second typically)
+    /// * `seed` - RNG seed for deterministic message generation
+    pub fn new(
+        config: AgentConfig,
+        attached_node: NodeId,
+        startup_time_millis: u64,
+        seed: u64,
+    ) -> Self {
+        SyncAgentState {
+            config,
+            attached_node,
+            protocol_session: ProtocolSession::new(),
+            protocol_state: AgentProtocolState::Uninitialized,
+            channels_setup: 0,
+            contacts_setup: 0,
+            next_action_time: Some(startup_time_millis),
+            direct_target_idx: 0,
+            direct_messages_sent: 0,
+            channel_target_idx: 0,
+            channel_messages_sent: 0,
+            message_seq: 0,
+            rng: ChaCha8Rng::seed_from_u64(seed),
+            direct_active: false,
+            channel_active: false,
+            startup_time_millis,
+        }
+    }
+
+    /// Get the next time the agent needs to be stepped.
+    pub fn next_action_time(&self) -> Option<u64> {
+        self.next_action_time
+    }
+
+    /// Process serial data received from firmware.
+    ///
+    /// Returns any serial data to send TO firmware.
+    pub fn process_firmware_output(&mut self, data: &[u8], current_millis: u64) -> Option<Vec<u8>> {
+        // Feed data into protocol decoder
+        self.protocol_session.feed(data);
+
+        // Process all complete messages
+        let mut response_data = Vec::new();
+        loop {
+            match self.protocol_session.try_decode() {
+                Ok(Some(msg)) => {
+                    if let Some(cmd_data) = self.handle_message(msg, current_millis) {
+                        response_data.extend(cmd_data);
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    // Protocol error, reset session
+                    self.protocol_session = ProtocolSession::new();
+                    break;
+                }
+            }
+        }
+
+        if response_data.is_empty() {
+            None
+        } else {
+            Some(response_data)
+        }
+    }
+
+    /// Step the agent at the given time.
+    ///
+    /// Returns any serial data to send TO firmware, and updates next_action_time.
+    pub fn step(&mut self, current_millis: u64) -> Option<Vec<u8>> {
+        // Check if it's time to act
+        if let Some(next_time) = self.next_action_time {
+            if current_millis < next_time {
+                return None;
+            }
+        }
+
+        match self.protocol_state {
+            AgentProtocolState::Uninitialized => {
+                // Start initialization by sending DeviceQuery
+                self.protocol_state = AgentProtocolState::AwaitingDeviceInfo;
+                // Clear next_action_time while waiting for response
+                self.next_action_time = None;
+                Some(self.encode_command(&Command::DeviceQuery { app_version: 8 }))
+            }
+            AgentProtocolState::Ready => {
+                // Ready to send messages - check what action to take
+                self.step_messaging(current_millis)
+            }
+            _ => {
+                // Waiting for firmware response - don't schedule more timers
+                self.next_action_time = None;
+                None
+            }
+        }
+    }
+
+    /// Handle a message from the firmware.
+    fn handle_message(&mut self, msg: Message, current_millis: u64) -> Option<Vec<u8>> {
+        match msg {
+            Message::Response(response) => self.handle_response(response, current_millis),
+            Message::Push(_push) => {
+                // Push notifications (message received, etc.) - just consume
+                None
+            }
+        }
+    }
+
+    /// Handle a response from the firmware.
+    fn handle_response(&mut self, response: Response, current_millis: u64) -> Option<Vec<u8>> {
+        match response {
+            Response::DeviceInfo(_) => {
+                // Got device info, send AppStart
+                self.protocol_state = AgentProtocolState::AwaitingAppStart;
+                Some(self.encode_command(&Command::AppStart {
+                    reserved: [0u8; 7],
+                    app_name: "MCSim".to_string(),
+                }))
+            }
+            Response::SelfInfo(_) => {
+                // Got self info, start channel setup
+                self.start_channel_setup(current_millis)
+            }
+            Response::Ok => {
+                // Generic OK response - depends on current state
+                match self.protocol_state {
+                    AgentProtocolState::SettingUpChannels => {
+                        self.channels_setup += 1;
+                        self.continue_channel_setup(current_millis)
+                    }
+                    AgentProtocolState::SettingUpContacts => {
+                        self.contacts_setup += 1;
+                        self.continue_contact_setup(current_millis)
+                    }
+                    _ => None,
+                }
+            }
+            Response::EndOfContacts { .. } => {
+                // Contacts were queried (after setup) - we're ready
+                self.on_ready(current_millis)
+            }
+            Response::Sent { .. } => {
+                // Message sent - schedule next message
+                self.schedule_next_message(current_millis);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Start setting up channels.
+    fn start_channel_setup(&mut self, current_millis: u64) -> Option<Vec<u8>> {
+        let total_channels = self.config.channel.targets.len() 
+            + self.config.channel.subscribe_only.len();
+        
+        if total_channels == 0 {
+            // No channels, go to contact setup
+            return self.start_contact_setup(current_millis);
+        }
+
+        self.channels_setup = 0;
+        self.protocol_state = AgentProtocolState::SettingUpChannels;
+        self.send_next_channel_setup()
+    }
+
+    /// Continue channel setup.
+    fn continue_channel_setup(&mut self, current_millis: u64) -> Option<Vec<u8>> {
+        let total_channels = self.config.channel.targets.len() 
+            + self.config.channel.subscribe_only.len();
+        
+        if self.channels_setup >= total_channels {
+            // All channels set up, move to contacts
+            return self.start_contact_setup(current_millis);
+        }
+        
+        self.send_next_channel_setup()
+    }
+
+    /// Send the next SetChannel command.
+    fn send_next_channel_setup(&self) -> Option<Vec<u8>> {
+        let channel = self.get_channel_for_setup(self.channels_setup)?;
+        let channel_idx = self.channels_setup as u8;
+        let secret = channel.get_secret();
+
+        Some(self.encode_command(&Command::SetChannel {
+            channel: ChannelInfo {
+                index: channel_idx,
+                name: channel.name.clone(),
+                secret,
+            },
+        }))
+    }
+
+    /// Get the channel config for a given setup index.
+    fn get_channel_for_setup(&self, setup_idx: usize) -> Option<&ChannelTarget> {
+        let target_count = self.config.channel.targets.len();
+        if setup_idx < target_count {
+            Some(&self.config.channel.targets[setup_idx])
+        } else {
+            let subscribe_idx = setup_idx - target_count;
+            self.config.channel.subscribe_only.get(subscribe_idx)
+        }
+    }
+
+    /// Start setting up contacts.
+    fn start_contact_setup(&mut self, current_millis: u64) -> Option<Vec<u8>> {
+        if self.config.contacts.is_empty() {
+            // No contacts, go directly to ready
+            return self.on_ready(current_millis);
+        }
+
+        self.contacts_setup = 0;
+        self.protocol_state = AgentProtocolState::SettingUpContacts;
+        self.send_next_contact_setup()
+    }
+
+    /// Continue contact setup.
+    fn continue_contact_setup(&mut self, current_millis: u64) -> Option<Vec<u8>> {
+        if self.contacts_setup >= self.config.contacts.len() {
+            // All contacts set up, query them back
+            return Some(self.encode_command(&Command::GetContacts { since: None }));
+        }
+        
+        self.send_next_contact_setup()
+    }
+
+    /// Send the next AddUpdateContact command.
+    fn send_next_contact_setup(&self) -> Option<Vec<u8>> {
+        let contact = self.config.contacts.get(self.contacts_setup)?;
+        
+        Some(self.encode_command(&Command::AddUpdateContact {
+            contact: ContactInfo {
+                public_key: PublicKey(contact.public_key.0),
+                contact_type: contact.contact_type,
+                flags: 0,
+                out_path_len: -1,
+                out_path: [0u8; mcsim_companion_protocol::MAX_PATH_SIZE],
+                name: contact.name.clone(),
+                last_advert_timestamp: 0,
+                gps_lat: 0,
+                gps_lon: 0,
+                lastmod: 0,
+            },
+        }))
+    }
+
+    /// Called when the agent is ready to start messaging.
+    fn on_ready(&mut self, current_millis: u64) -> Option<Vec<u8>> {
+        self.protocol_state = AgentProtocolState::Ready;
+        
+        // Schedule startup timers for messaging
+        let mut earliest_time = u64::MAX;
+        
+        if self.config.direct.enabled && !self.config.direct.targets.is_empty() {
+            let startup_ms = (self.config.direct.startup_s * 1000.0) as u64;
+            let direct_start = current_millis + startup_ms;
+            self.direct_active = true;
+            if direct_start < earliest_time {
+                earliest_time = direct_start;
+            }
+        }
+        
+        if self.config.channel.enabled && !self.config.channel.targets.is_empty() {
+            let startup_ms = (self.config.channel.startup_s * 1000.0) as u64;
+            let channel_start = current_millis + startup_ms;
+            self.channel_active = true;
+            if channel_start < earliest_time {
+                earliest_time = channel_start;
+            }
+        }
+        
+        if earliest_time < u64::MAX {
+            self.next_action_time = Some(earliest_time);
+        } else {
+            self.next_action_time = None;
+        }
+        
+        None
+    }
+
+    /// Step messaging (when in Ready state).
+    fn step_messaging(&mut self, current_millis: u64) -> Option<Vec<u8>> {
+        // Check direct messaging
+        if self.direct_active && !self.config.direct.targets.is_empty() {
+            if let Some(count) = self.config.direct.message_count {
+                if self.direct_messages_sent >= count {
+                    self.direct_active = false;
+                }
+            }
+            
+            if self.direct_active {
+                // Send a direct message
+                let target_idx = self.direct_target_idx % self.config.direct.targets.len();
+                let target = &self.config.direct.targets[target_idx];
+                self.direct_target_idx += 1;
+                self.direct_messages_sent += 1;
+                self.message_seq += 1;
+                
+                let message = format!("DM #{} from {}", self.message_seq, self.config.name);
+                let timestamp = (current_millis / 1000) as u32;
+                let recipient_prefix = PublicKeyPrefix::new(target.public_key_hash());
+                
+                self.schedule_next_message(current_millis);
+                
+                return Some(self.encode_command(&Command::SendTextMessage {
+                    text_type: TextType::Plain,
+                    attempt: 0,
+                    timestamp,
+                    recipient_prefix,
+                    text: message,
+                }));
+            }
+        }
+        
+        // Check channel messaging
+        if self.channel_active && !self.config.channel.targets.is_empty() {
+            if let Some(count) = self.config.channel.message_count {
+                if self.channel_messages_sent >= count {
+                    self.channel_active = false;
+                }
+            }
+            
+            if self.channel_active {
+                // Send a channel message
+                let target_idx = self.channel_target_idx % self.config.channel.targets.len();
+                let _target = &self.config.channel.targets[target_idx];
+                self.channel_target_idx += 1;
+                self.channel_messages_sent += 1;
+                self.message_seq += 1;
+                
+                let message = format!("Channel #{} from {}", self.message_seq, self.config.name);
+                let timestamp = (current_millis / 1000) as u32;
+                
+                self.schedule_next_message(current_millis);
+                
+                return Some(self.encode_command(&Command::SendChannelTextMessage {
+                    text_type: TextType::Plain,
+                    channel_idx: target_idx as u8,
+                    timestamp,
+                    text: message,
+                }));
+            }
+        }
+        
+        // No more messaging
+        self.next_action_time = None;
+        None
+    }
+
+    /// Schedule the next message send.
+    fn schedule_next_message(&mut self, current_millis: u64) {
+        let mut next_time = u64::MAX;
+        
+        if self.direct_active {
+            let interval_ms = (self.config.direct.interval_s * 1000.0) as u64;
+            next_time = next_time.min(current_millis + interval_ms);
+        }
+        
+        if self.channel_active {
+            let interval_ms = (self.config.channel.interval_s * 1000.0) as u64;
+            next_time = next_time.min(current_millis + interval_ms);
+        }
+        
+        if next_time < u64::MAX {
+            self.next_action_time = Some(next_time);
+        } else {
+            self.next_action_time = None;
+        }
+    }
+
+    /// Encode a command to bytes.
+    fn encode_command(&self, cmd: &Command) -> Vec<u8> {
+        self.protocol_session.encode_command(cmd)
+    }
+}
+
+// ============================================================================
+// Firmware Loading Helpers
+// ============================================================================
+
+use mcsim_firmware::dll::FirmwareType;
+
+/// Get the FirmwareType from a node type string.
+///
+/// # Arguments
+/// * `node_type` - The node type string (e.g., "Repeater", "Companion", "RoomServer")
+///
+/// # Returns
+/// The corresponding FirmwareType, or None if unknown.
+pub fn firmware_type_from_node_type(node_type: &str) -> Option<FirmwareType> {
+    match node_type.to_lowercase().as_str() {
+        "repeater" => Some(FirmwareType::Repeater),
+        "companion" => Some(FirmwareType::Companion),
+        "room_server" | "roomserver" => Some(FirmwareType::RoomServer),
+        _ => None,
+    }
+}
+
+/// Load firmware DLLs for all types used in the simulation.
+///
+/// This loads each firmware DLL type exactly once and returns them in a map
+/// for efficient reuse when creating multiple nodes of the same type.
+///
+/// # Arguments
+/// * `node_infos` - List of node infos to determine which DLL types are needed
+///
+/// # Returns
+/// A map from FirmwareType to the loaded FirmwareDll Arc.
+pub fn load_firmware_dlls(
+    node_infos: &[NodeInfo],
+) -> Result<HashMap<FirmwareType, Arc<FirmwareDll>>, String> {
+    let mut dlls: HashMap<FirmwareType, Arc<FirmwareDll>> = HashMap::new();
+    
+    // Collect unique firmware types needed
+    for node_info in node_infos {
+        if let Some(fw_type) = firmware_type_from_node_type(&node_info.node_type) {
+            if !dlls.contains_key(&fw_type) {
+                let dll = FirmwareDll::load(fw_type)
+                    .map_err(|e| format!("Failed to load {:?} firmware DLL: {}", fw_type, e))?;
+                dlls.insert(fw_type, Arc::new(dll));
+            }
+        }
+    }
+    
+    Ok(dlls)
+}
+
+/// Create a FirmwareState from a NodeInfo.
+///
+/// This is a convenience function for creating firmware state using the information
+/// stored in NodeInfo during simulation building.
+///
+/// # Arguments
+/// * `node_info` - The node info containing keys, radio params, etc.
+/// * `dll` - The loaded firmware DLL for this node type
+/// * `sim_params` - Simulation parameters (RTC time, spin detection, etc.)
+///
+/// # Returns
+/// A new FirmwareState ready to be attached to a NodeThread.
+pub fn firmware_state_from_node_info(
+    node_info: &NodeInfo,
+    dll: Arc<FirmwareDll>,
+    sim_params: &FirmwareSimulationParams,
+) -> Result<FirmwareState, String> {
+    use sha2::{Sha512, Digest};
+    
+    // The firmware expects an "expanded" 64-byte private key which is the SHA512 hash
+    // of the 32-byte seed, with the first 32 bytes clamped for Ed25519.
+    let mut hasher = Sha512::new();
+    hasher.update(&node_info.private_key);
+    let hash_result = hasher.finalize();
+    let mut prv_key_64 = [0u8; 64];
+    prv_key_64.copy_from_slice(&hash_result);
+    // Apply Ed25519 clamping to the scalar (first 32 bytes)
+    prv_key_64[0] &= 248;
+    prv_key_64[31] &= 63;
+    prv_key_64[31] |= 64;
+    
+    let node_config = NodeConfig::default()
+        .with_keys(&node_info.public_key, &prv_key_64)
+        .with_initial_time(node_info.firmware_startup_time.as_millis(), sim_params.initial_rtc_secs as u32)
+        .with_rng_seed(node_info.rng_seed)
+        .with_name(&node_info.name)
+        .with_lora(
+            node_info.radio_params.frequency_hz as f32 / 1_000_000.0,
+            node_info.radio_params.bandwidth_hz as f32 / 1_000.0,
+            node_info.radio_params.spreading_factor,
+            node_info.radio_params.coding_rate,
+            node_info.radio_params.tx_power_dbm as u8,
+        )
+        .with_spin_detection(
+            sim_params.spin_detection_threshold,
+            sim_params.idle_loops_before_yield,
+        )
+        .with_spin_logging(
+            sim_params.log_spin_detection,
+            sim_params.log_loop_iterations,
+        );
+    
+    FirmwareState::new(dll, &node_config, sim_params)
+}
+
+// ============================================================================
 // Node Thread
 // ============================================================================
 
@@ -547,6 +1099,8 @@ pub mod timer_ids {
     pub const RADIO_TURNAROUND: u64 = 0x1000_0001;
     /// Radio TX complete timer - fires when transmission ends.
     pub const RADIO_TX_COMPLETE: u64 = 0x1000_0002;
+    /// Agent step timer - fires when agent needs to perform an action.
+    pub const AGENT_STEP: u64 = 0x2000_0001;
     
     /// Check if a timer ID belongs to the firmware.
     #[inline]
@@ -623,6 +1177,11 @@ pub struct NodeThread {
     ///
     /// These are used when generating `TransmitAir` events from firmware TX requests.
     radio_params: RadioParams,
+    /// Agent state for companion nodes (traffic generation).
+    ///
+    /// When `Some`, this node has an agent that generates traffic.
+    /// The agent sends serial data to firmware and processes responses.
+    agent: Option<SyncAgentState>,
 }
 
 impl NodeThread {
@@ -640,6 +1199,7 @@ impl NodeThread {
             event_sequence: 0,
             firmware: None,
             radio_params: default_radio_params(),
+            agent: None,
         }
     }
 
@@ -653,20 +1213,51 @@ impl NodeThread {
     /// * `config` - Node thread configuration
     /// * `firmware` - Firmware state to attach
     /// * `radio_params` - Radio parameters for transmissions
+    /// * `startup_time` - When to first step the firmware (usually from NodeInfo)
     pub fn with_firmware(
         config: NodeThreadConfig,
         firmware: FirmwareState,
         radio_params: RadioParams,
+        startup_time: SimTime,
     ) -> Self {
+        let mut local_queue = BinaryHeap::new();
+        
+        // Push initial timer event to kick off firmware execution
+        // This is equivalent to the initial Timer event in EventLoop
+        local_queue.push(LocalEvent {
+            time: startup_time,
+            payload: LocalEventPayload::Timer { timer_id: timer_ids::FIRMWARE_WAKE },
+        });
+        
         Self {
             config,
-            local_queue: BinaryHeap::new(),
+            local_queue,
             current_time: SimTime::ZERO,
             trace_events: Vec::new(),
-            event_sequence: 0,
+            event_sequence: 1, // Start at 1 since we pushed one event
             firmware: Some(firmware),
             radio_params,
+            agent: None,
         }
+    }
+
+    /// Attach an agent to this node thread.
+    ///
+    /// The agent will generate traffic by sending serial commands to the firmware
+    /// and processing responses.
+    pub fn set_agent(&mut self, agent: SyncAgentState) {
+        self.agent = Some(agent);
+        
+        // Schedule initial agent step
+        self.local_queue.push(LocalEvent {
+            time: SimTime::ZERO,
+            payload: LocalEventPayload::Timer { timer_id: timer_ids::AGENT_STEP },
+        });
+    }
+
+    /// Check if this node has an agent attached.
+    pub fn has_agent(&self) -> bool {
+        self.agent.is_some()
     }
 
     /// Check if this node has firmware attached.
@@ -739,21 +1330,7 @@ impl NodeThread {
         // Process the step output based on yield reason
         match output.yield_reason {
             YieldReason::Idle => {
-                // Schedule wake timer if firmware wants to wake in the future
-                if output.wake_millis > sim_millis {
-                    let wake_time = SimTime::from_micros(output.wake_millis * 1000);
-                    self.push_local_event(
-                        wake_time,
-                        LocalEventPayload::Timer { timer_id: timer_ids::FIRMWARE_WAKE },
-                    );
-                    
-                    if tracing_enabled {
-                        self.trace_events.push(TraceEvent {
-                            time: event_time,
-                            description: format!("Scheduled firmware wake at {:?}", wake_time),
-                        });
-                    }
-                }
+                // Idle - just schedule wake timer below
             }
             
             YieldReason::RadioTxStart => {
@@ -825,6 +1402,25 @@ impl NodeThread {
             }
         }
         
+        // Schedule wake timer if firmware wants to wake in the future
+        // This applies to ALL yield reasons (except fatal errors) because the
+        // firmware may have internal timers to process regardless of what
+        // action it just took
+        if output.wake_millis > sim_millis {
+            let wake_time = SimTime::from_micros(output.wake_millis * 1000);
+            self.push_local_event(
+                wake_time,
+                LocalEventPayload::Timer { timer_id: timer_ids::FIRMWARE_WAKE },
+            );
+            
+            if tracing_enabled {
+                self.trace_events.push(TraceEvent {
+                    time: event_time,
+                    description: format!("Scheduled firmware wake at {:?}", wake_time),
+                });
+            }
+        }
+        
         // Handle serial TX output
         if let Some(serial_data) = output.serial_tx {
             if tracing_enabled {
@@ -891,6 +1487,92 @@ impl NodeThread {
         
         // Step the firmware to process
         self.step_firmware_sync(event_time, report_tx);
+    }
+
+    // ========================================================================
+    // Agent Stepping
+    // ========================================================================
+
+    /// Step the agent synchronously.
+    ///
+    /// This is called when an agent timer fires. The agent will:
+    /// 1. Check if it's time to send a message
+    /// 2. Generate serial data (protocol commands) to send to firmware
+    /// 3. Schedule the next agent step
+    fn step_agent_sync(&mut self, event_time: SimTime) {
+        if self.agent.is_none() {
+            return;
+        }
+        
+        let sim_millis = event_time.as_micros() / 1000;
+        
+        // Step the agent and get any serial data to send to firmware
+        let serial_data = self.agent.as_mut().unwrap().step(sim_millis);
+        
+        if let Some(data) = serial_data {
+            self.trace(|| TraceEvent {
+                time: event_time,
+                description: format!("Agent → Firmware: {} bytes", data.len()),
+            });
+            
+            // Queue the data to be sent to firmware
+            self.push_local_event(
+                event_time,
+                LocalEventPayload::AgentTx { data },
+            );
+        }
+        
+        // Schedule next agent step if the agent has pending work
+        if let Some(next_time) = self.agent.as_ref().unwrap().next_action_time() {
+            let next_event_time = SimTime::from_micros(next_time * 1000);
+            self.push_local_event(
+                next_event_time,
+                LocalEventPayload::Timer { timer_id: timer_ids::AGENT_STEP },
+            );
+            
+            self.trace(|| TraceEvent {
+                time: event_time,
+                description: format!("Scheduled agent step at {:?}", next_event_time),
+            });
+        }
+    }
+
+    /// Handle firmware serial output destined for the agent.
+    ///
+    /// This is called when firmware sends serial data (responses to agent commands).
+    fn handle_firmware_tx_to_agent(&mut self, data: &[u8], event_time: SimTime) {
+        if self.agent.is_none() {
+            return;
+        }
+        
+        let sim_millis = event_time.as_micros() / 1000;
+        
+        // Process the firmware output through the agent
+        let response_data = self.agent.as_mut().unwrap().process_firmware_output(data, sim_millis);
+        
+        // If agent generated a response, queue it
+        if let Some(data) = response_data {
+            self.trace(|| TraceEvent {
+                time: event_time,
+                description: format!("Agent response: {} bytes", data.len()),
+            });
+            
+            self.push_local_event(
+                event_time,
+                LocalEventPayload::AgentTx { data },
+            );
+        }
+        
+        // Update agent timer if needed
+        if let Some(next_time) = self.agent.as_ref().unwrap().next_action_time() {
+            let next_event_time = SimTime::from_micros(next_time * 1000);
+            // Check if we need to schedule (or reschedule) the agent step
+            // This is important when the agent transitions to Ready state
+            self.push_local_event(
+                next_event_time,
+                LocalEventPayload::Timer { timer_id: timer_ids::AGENT_STEP },
+            );
+        }
     }
 
     // ========================================================================
@@ -1208,11 +1890,12 @@ impl NodeThread {
                         self.step_firmware_sync(event_time, report_tx);
                     }
                 } else if timer_ids::is_agent_timer(timer_id) {
-                    // Agent timer - in full impl: step agent
+                    // Agent timer - step the agent
                     self.trace(|| TraceEvent {
                         time: event_time,
                         description: format!("Agent timer {} fired", timer_id),
                     });
+                    self.step_agent_sync(event_time);
                 }
             }
 
@@ -1289,11 +1972,13 @@ impl NodeThread {
 
             LocalEventPayload::FirmwareTx { data } => {
                 // Firmware sending data to agent (serial TX)
-                // In full implementation: agent.handle_serial_rx(&data)
                 self.trace(|| TraceEvent {
                     time: event_time,
                     description: format!("Firmware → Agent: {} bytes", data.len()),
                 });
+                
+                // Forward to agent and process any response
+                self.handle_firmware_tx_to_agent(&data, event_time);
             }
 
             // ================================================================
@@ -1491,6 +2176,69 @@ pub fn spawn_node_thread_with_uart(
     NodeThreadHandle { cmd_tx, name, thread }
 }
 
+/// Spawn a node thread with firmware attached for synchronous stepping.
+///
+/// This variant creates a node thread that owns firmware and steps it synchronously.
+/// Use this for production simulations where each node runs actual firmware.
+///
+/// # Arguments
+///
+/// * `config` - Node thread configuration
+/// * `report_tx` - Channel for sending reports to coordinator
+/// * `firmware` - Firmware state to attach
+/// * `radio_params` - Radio parameters for transmissions
+/// * `startup_time` - When to first step the firmware
+///
+/// # Returns
+///
+/// A handle for the coordinator to communicate with the thread.
+pub fn spawn_node_thread_with_firmware(
+    config: NodeThreadConfig,
+    report_tx: Sender<(usize, NodeReport)>,
+    firmware: FirmwareState,
+    radio_params: RadioParams,
+    startup_time: SimTime,
+) -> NodeThreadHandle {
+    spawn_node_thread_with_firmware_and_agent(config, report_tx, firmware, radio_params, startup_time, None)
+}
+
+/// Spawn a node thread with firmware and optional agent (Phase 3 + Agent support).
+///
+/// This is the full version that can optionally include an agent for traffic generation.
+///
+/// # Arguments
+///
+/// * `config` - Node thread configuration
+/// * `report_tx` - Channel for sending reports to coordinator
+/// * `firmware` - Firmware state to attach
+/// * `radio_params` - Radio parameters for transmissions
+/// * `startup_time` - When to first step the firmware
+/// * `agent_config` - Optional agent configuration for traffic generation
+///
+/// # Returns
+///
+/// A handle for the coordinator to communicate with the thread.
+pub fn spawn_node_thread_with_firmware_and_agent(
+    config: NodeThreadConfig,
+    report_tx: Sender<(usize, NodeReport)>,
+    firmware: FirmwareState,
+    radio_params: RadioParams,
+    startup_time: SimTime,
+    agent_config: Option<AgentConfig>,
+) -> NodeThreadHandle {
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let name = config.name.clone();
+
+    let thread = thread::Builder::new()
+        .name(format!("node-{}", config.name))
+        .spawn(move || {
+            node_thread_main_with_firmware_and_agent(config, cmd_rx, report_tx, firmware, radio_params, startup_time, agent_config);
+        })
+        .expect("Failed to spawn node thread with firmware");
+
+    NodeThreadHandle { cmd_tx, name, thread }
+}
+
 /// Main function for a node thread.
 ///
 /// Blocks waiting for commands from the coordinator and processes them
@@ -1574,6 +2322,62 @@ fn node_thread_main_with_uart(
                         });
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Main function for a node thread with firmware (synchronous stepping).
+///
+/// This variant owns firmware and steps it synchronously. It's the primary mode
+/// for production simulations.
+fn node_thread_main_with_firmware(
+    config: NodeThreadConfig,
+    cmd_rx: Receiver<NodeCommand>,
+    report_tx: Sender<(usize, NodeReport)>,
+    firmware: FirmwareState,
+    radio_params: RadioParams,
+    startup_time: SimTime,
+) {
+    node_thread_main_with_firmware_and_agent(config, cmd_rx, report_tx, firmware, radio_params, startup_time, None)
+}
+
+/// Main function for a node thread with firmware and optional agent.
+///
+/// This variant owns firmware and steps it synchronously, with optional agent
+/// for traffic generation.
+fn node_thread_main_with_firmware_and_agent(
+    config: NodeThreadConfig,
+    cmd_rx: Receiver<NodeCommand>,
+    report_tx: Sender<(usize, NodeReport)>,
+    firmware: FirmwareState,
+    radio_params: RadioParams,
+    startup_time: SimTime,
+    agent_config: Option<AgentConfig>,
+) {
+    let mut node = NodeThread::with_firmware(config, firmware, radio_params, startup_time);
+    
+    // If agent config provided, create and attach agent
+    if let Some(config) = agent_config {
+        // Use startup time as seed for deterministic agent behavior
+        let seed = startup_time.as_micros();
+        // Agent starts 1 second after firmware startup (time for protocol init)
+        let agent_startup = startup_time.as_micros() / 1000 + 1000;
+        let agent = SyncAgentState::new(config, NodeId::from_bytes([0u8; 32]), agent_startup, seed);
+        node.set_agent(agent);
+    }
+
+    loop {
+        // Block waiting for a command from the coordinator
+        match cmd_rx.recv() {
+            Ok(cmd) => {
+                if !node.handle_command(cmd, &report_tx) {
+                    break; // Shutdown requested
+                }
+            }
+            Err(_) => {
+                // Channel closed - coordinator has dropped us
+                break;
             }
         }
     }
@@ -1739,6 +2543,12 @@ pub struct Coordinator {
     coalesce_config: CoalesceConfig,
     /// Statistics for performance monitoring.
     stats: CoordinatorStats,
+    /// Link model for radio propagation (replaces Graph entity).
+    link_model: Option<LinkModel>,
+    /// Mapping from radio entity ID to node index for ReceiveAir routing.
+    radio_to_node_index: HashMap<EntityId, usize>,
+    /// Information about each node (from BuiltSimulation).
+    node_infos: Vec<NodeInfo>,
 }
 
 /// Statistics collected by the coordinator for performance monitoring.
@@ -1752,6 +2562,10 @@ pub struct CoordinatorStats {
     pub total_node_steps: u64,
     /// Maximum number of TransmitAir events in a single advance.
     pub max_transmits_per_advance: usize,
+    /// Total packets transmitted.
+    pub packets_transmitted: u64,
+    /// Total packets received (delivered).
+    pub packets_received: u64,
 }
 
 impl Coordinator {
@@ -1767,6 +2581,9 @@ impl Coordinator {
             node_wake_times: Vec::new(),
             coalesce_config: CoalesceConfig::default(),
             stats: CoordinatorStats::default(),
+            link_model: None,
+            radio_to_node_index: HashMap::new(),
+            node_infos: Vec::new(),
         }
     }
 
@@ -1782,6 +2599,9 @@ impl Coordinator {
             node_wake_times: Vec::new(),
             coalesce_config,
             stats: CoordinatorStats::default(),
+            link_model: None,
+            radio_to_node_index: HashMap::new(),
+            node_infos: Vec::new(),
         }
     }
 
@@ -1810,6 +2630,52 @@ impl Coordinator {
         self.coalesce_config = config;
     }
 
+    /// Get the node infos.
+    pub fn node_infos(&self) -> &[NodeInfo] {
+        &self.node_infos
+    }
+
+    /// Create a Coordinator from a BuiltSimulation.
+    ///
+    /// This factory method sets up the coordinator with:
+    /// - Link model for radio propagation (replaces Graph entity)
+    /// - Node-to-radio mappings for routing ReceiveAir events
+    /// - Node info for display purposes
+    ///
+    /// Note: This does NOT create node threads with firmware. Use [`add_node_with_firmware()`]
+    /// after calling this, or use the higher-level integration in main.rs.
+    ///
+    /// # Arguments
+    ///
+    /// * `simulation` - The built simulation with link model and node infos
+    ///
+    /// # Returns
+    ///
+    /// A new Coordinator configured with the simulation's link model.
+    pub fn from_simulation(simulation: BuiltSimulation) -> Self {
+        let (report_tx, report_rx) = crossbeam_channel::unbounded();
+        
+        // Build radio-to-node-index mapping
+        let mut radio_to_node_index = HashMap::new();
+        for (node_index, node_info) in simulation.node_infos.iter().enumerate() {
+            radio_to_node_index.insert(EntityId::new(node_info.radio_entity_id), node_index);
+        }
+        
+        Self {
+            nodes: Vec::new(),
+            report_rx,
+            report_tx,
+            event_queue: BinaryHeap::new(),
+            current_time: SimTime::ZERO,
+            node_wake_times: Vec::new(),
+            coalesce_config: CoalesceConfig::default(),
+            stats: CoordinatorStats::default(),
+            link_model: Some(simulation.link_model),
+            radio_to_node_index,
+            node_infos: simulation.node_infos,
+        }
+    }
+
     /// Spawn and add a node thread.
     pub fn add_node(&mut self, config: NodeThreadConfig) {
         let node_index = self.nodes.len();
@@ -1820,6 +2686,115 @@ impl Coordinator {
         let handle = spawn_node_thread(config, self.report_tx.clone());
         self.nodes.push(handle);
         self.node_wake_times.push(None);
+    }
+
+    /// Add a node thread with firmware attached.
+    ///
+    /// This variant creates a node thread that owns firmware and steps it synchronously.
+    /// It also registers the radio-to-node mapping for ReceiveAir routing.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Node thread configuration
+    /// * `firmware` - Firmware state to attach
+    /// * `radio_params` - Radio parameters for transmissions
+    /// * `startup_time` - When to first step the firmware
+    pub fn add_node_with_firmware(
+        &mut self,
+        config: NodeThreadConfig,
+        firmware: FirmwareState,
+        radio_params: RadioParams,
+        startup_time: SimTime,
+    ) {
+        self.add_node_with_firmware_and_agent(config, firmware, radio_params, startup_time, None);
+    }
+
+    /// Add a node thread with firmware and optional agent attached.
+    ///
+    /// This is the full variant that creates a node thread that owns firmware,
+    /// steps it synchronously, and optionally includes an agent for traffic generation.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Node thread configuration
+    /// * `firmware` - Firmware state to attach
+    /// * `radio_params` - Radio parameters for transmissions
+    /// * `startup_time` - When to first step the firmware
+    /// * `agent_config` - Optional agent configuration for traffic generation
+    pub fn add_node_with_firmware_and_agent(
+        &mut self,
+        config: NodeThreadConfig,
+        firmware: FirmwareState,
+        radio_params: RadioParams,
+        startup_time: SimTime,
+        agent_config: Option<AgentConfig>,
+    ) {
+        let node_index = self.nodes.len();
+        let config = NodeThreadConfig {
+            node_index,
+            ..config
+        };
+        
+        // Register radio-to-node mapping
+        self.radio_to_node_index.insert(config.radio_entity_id, node_index);
+        
+        // Spawn the node thread with firmware and optional agent
+        let handle = spawn_node_thread_with_firmware_and_agent(
+            config, self.report_tx.clone(), firmware, radio_params, startup_time, agent_config
+        );
+        self.nodes.push(handle);
+        
+        // Set the initial wake time for the coordinator's tracking
+        self.node_wake_times.push(Some(startup_time));
+    }
+
+    /// Set initial wake time for a node.
+    ///
+    /// This is used to schedule initial firmware startup after the coordinator is created.
+    pub fn set_initial_wake_time(&mut self, node_index: usize, wake_time: SimTime) {
+        if node_index < self.node_wake_times.len() {
+            self.node_wake_times[node_index] = Some(wake_time);
+        }
+    }
+
+    /// Set the link model for radio propagation.
+    ///
+    /// The link model determines which radios can receive transmissions from other radios.
+    /// This replaces the Graph entity used in the EventLoop architecture.
+    pub fn set_link_model(&mut self, link_model: LinkModel) {
+        self.link_model = Some(link_model);
+    }
+
+    /// Process a transmission end event by routing it through the link model.
+    ///
+    /// This implements the radio propagation that was previously handled by the Graph entity.
+    /// For each receiver in range (according to the link model), we send a `ReceiveAir` command.
+    fn process_transmission_end(&mut self, tx_event: TransmitAirEvent) {
+        let link_model = match &self.link_model {
+            Some(lm) => lm,
+            None => return, // No link model - can't route transmissions
+        };
+
+        // Route to all receivers according to the link model
+        for (receiver_radio_id, link_params) in link_model.get_receivers(tx_event.radio_id) {
+            // Find which node owns this receiver radio
+            if let Some(&node_index) = self.radio_to_node_index.get(&receiver_radio_id) {
+                // Build the ReceiveAir event with link parameters
+                let rx_event = ReceiveAirEvent {
+                    source_radio_id: tx_event.radio_id,
+                    packet: tx_event.packet.clone(),
+                    params: tx_event.params.clone(),
+                    end_time: tx_event.end_time,
+                    mean_snr_db_at20dbm: link_params.mean_snr_db_at20dbm,
+                    snr_std_dev: link_params.snr_std_dev,
+                    rssi_dbm: link_params.rssi_dbm,
+                };
+                
+                // Send ReceiveAir command to the node
+                let _ = self.nodes[node_index].send(NodeCommand::ReceiveAir(rx_event));
+                self.stats.packets_received += 1;
+            }
+        }
     }
 
     /// Calculate the next global time to advance to.
@@ -1920,6 +2895,7 @@ impl Coordinator {
                                 payload: GlobalEventPayload::TransmissionEnd { tx_event },
                             });
                             transmits_this_advance += 1;
+                            self.stats.packets_transmitted += 1;
                         }
                         NodeReport::Error(msg) => {
                             return Err(format!("Node {} error: {}", node_index, msg));
@@ -1949,10 +2925,7 @@ impl Coordinator {
     /// This method implements the main simulation loop with:
     /// - Wake time coalescing to reduce time advancement cycles
     /// - Parallel node advancement for concurrent processing
-    /// - Global event processing for air transmissions
-    ///
-    /// A full implementation would integrate with the Graph entity for
-    /// routing transmissions to receiver nodes.
+    /// - Global event processing for air transmissions (routed through LinkModel)
     pub fn run(&mut self, duration: SimTime) -> Result<(), String> {
         let end_time = duration;
 
@@ -1967,14 +2940,19 @@ impl Coordinator {
                 break;
             }
 
-            // Process any global events at the current time
+            // Process any global events up to the next time
             while let Some(event) = self.event_queue.peek() {
                 if event.time > next_time {
                     break;
                 }
-                let _event = self.event_queue.pop().unwrap();
-                // In full implementation: route TransmitAir through Graph
-                // and send ReceiveAir to affected nodes
+                let event = self.event_queue.pop().unwrap();
+                
+                // Route transmissions through the link model
+                match event.payload {
+                    GlobalEventPayload::TransmissionEnd { tx_event } => {
+                        self.process_transmission_end(tx_event);
+                    }
+                }
             }
 
             // Advance all nodes in parallel
@@ -2015,12 +2993,18 @@ impl Coordinator {
                 break;
             }
 
-            // Process global events
+            // Process global events (route transmissions through link model)
             while let Some(event) = self.event_queue.peek() {
                 if event.time > next_time {
                     break;
                 }
-                let _event = self.event_queue.pop().unwrap();
+                let event = self.event_queue.pop().unwrap();
+                
+                match event.payload {
+                    GlobalEventPayload::TransmissionEnd { tx_event } => {
+                        self.process_transmission_end(tx_event);
+                    }
+                }
             }
 
             // Advance all nodes in parallel

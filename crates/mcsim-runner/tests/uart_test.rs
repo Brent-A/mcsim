@@ -4,8 +4,6 @@
 //! per-node threading architecture. TCP data is handled directly in node
 //! threads instead of routing through the coordinator.
 
-#![cfg(feature = "per_node_threading")]
-
 use crossbeam_channel;
 use mcsim_common::{EntityId, SimTime};
 use mcsim_runner::node_thread::{

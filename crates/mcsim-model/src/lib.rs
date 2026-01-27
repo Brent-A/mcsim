@@ -438,7 +438,7 @@ pub fn load_models_from_str(yaml_strs: &[&str]) -> Result<Model, ModelError> {
 // Model Building
 // ============================================================================
 
-/// Information about a node for display purposes.
+/// Information about a node for display and for creating firmware in per-node threading mode.
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
     /// Node name from the model.
@@ -453,8 +453,20 @@ pub struct NodeInfo {
     pub location: GeoCoord,
     /// Public key (32 bytes).
     pub public_key: [u8; 32],
+    /// Private key (32 bytes) - needed for per-node threading mode.
+    pub private_key: [u8; 32],
+    /// Radio parameters for this node.
+    pub radio_params: RadioParams,
+    /// RNG seed for this node (for deterministic simulation).
+    pub rng_seed: u32,
+    /// Firmware startup time (when the firmware should start running).
+    pub firmware_startup_time: SimTime,
     /// Specific TCP port for UART connection (if specified in config).
     pub uart_port: Option<u16>,
+    /// Agent configuration for this node (only for companions).
+    pub agent_config: Option<mcsim_agents::AgentConfig>,
+    /// Node ID (derived from public key) - needed for agent target resolution.
+    pub node_id: mcsim_common::NodeId,
 }
 
 /// Result of building a simulation from a model.
@@ -604,7 +616,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
             altitude_m: resolved.get(&properties::LOCATION_ALTITUDE_M),
         };
         let radio_config = mcsim_lora::RadioConfig {
-            params: radio_params,
+            params: radio_params.clone(),
             rx_to_tx_turnaround: SimTime::from_micros(100),
             tx_to_rx_turnaround: SimTime::from_micros(100),
             graph_entity: graph_id,
@@ -686,7 +698,13 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                     radio_entity_id: radio_id.0,
                     location: position.clone(),
                     public_key,
+                    private_key,
+                    radio_params,
+                    rng_seed: node_rng_seed,
+                    firmware_startup_time,
                     uart_port,
+                    agent_config: None, // Repeaters don't have agents
+                    node_id,
                 });
             }
             "companion" => {
@@ -712,6 +730,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                 });
                 event_id_counter += 1;
                 
+                // Note: agent_config will be set in the second pass after all node_ids are known
                 node_infos.push(NodeInfo {
                     name: node.name.clone(),
                     node_type: "Companion".to_string(),
@@ -719,7 +738,13 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                     radio_entity_id: radio_id.0,
                     location: position.clone(),
                     public_key,
+                    private_key,
+                    radio_params,
+                    rng_seed: node_rng_seed,
+                    firmware_startup_time,
                     uart_port,
+                    agent_config: None, // Will be populated in second pass
+                    node_id,
                 });
             }
             "room_server" | "roomserver" => {
@@ -773,7 +798,13 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                     radio_entity_id: radio_id.0,
                     location: position.clone(),
                     public_key,
+                    private_key,
+                    radio_params,
+                    rng_seed: node_rng_seed,
+                    firmware_startup_time,
                     uart_port,
+                    agent_config: None, // RoomServers don't have agents (they have CLI agents)
+                    node_id,
                 });
             }
             _ => {
@@ -945,6 +976,11 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
             channel: channel_config,
             contacts,
         };
+
+        // Store agent_config in the corresponding NodeInfo for per-node threading mode
+        if let Some(node_info) = node_infos.iter_mut().find(|n| n.name == node_config.name) {
+            node_info.agent_config = Some(agent_config.clone());
+        }
 
         let agent = mcsim_agents::Agent::new(agent_id, agent_config, node_id, firmware_id);
         entities.register(Box::new(agent));

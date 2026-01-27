@@ -517,7 +517,7 @@ The current implementation provides:
 - Link model with SNR/RSSI for packet propagation
 - State version tracking in `SimRadio` for spin detection
 - `sim_notify_state_change()` API for coordinator-driven state updates
-- **Per-node threading architecture** (via `per_node_threading` feature flag)
+- **Per-node threading architecture** with `Coordinator`
 - **Parallel node advancement** with `Coordinator`
 - **Wake time coalescing** to reduce time advancement cycles
 - **Direct TCP/UART handling** in node threads
@@ -528,7 +528,7 @@ The current implementation provides:
 
 ## Per-Node Threading Architecture
 
-When the `per_node_threading` feature flag is enabled, the simulator uses a new architecture where each node runs on its own thread. This provides better parallelism and cleaner separation of concerns.
+The simulator uses a per-node threading architecture where each node runs on its own thread. This provides better parallelism and cleaner separation of concerns.
 
 ### Architecture Overview
 
@@ -674,22 +674,6 @@ select! {
 ```
 
 **Note:** TCP data arrival is non-deterministic. For deterministic simulations, disable TCP connections.
-
-### Feature Flag
-
-The per-node threading architecture is gated behind the `per_node_threading` feature:
-
-```toml
-# In Cargo.toml
-[features]
-per_node_threading = ["crossbeam-channel"]
-```
-
-```rust
-// In code
-#[cfg(feature = "per_node_threading")]
-pub mod node_thread;
-```
 
 ### Performance Monitoring
 
