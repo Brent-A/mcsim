@@ -52,6 +52,9 @@ MCSim is a simulation framework for [MeshCore](https://github.com/liamcottle/mes
    
    # Or use the batch wrapper
    .\scripts\setup_dependencies.bat
+
+   # Or use on Linux
+   .\scripts\setup_dependencies.sh
    ```
 
    This downloads:
