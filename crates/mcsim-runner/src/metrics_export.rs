@@ -24,6 +24,32 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 // ============================================================================
+// JSON Sorting Utilities
+// ============================================================================
+
+/// Recursively sort all JSON objects by key to ensure consistent output order.
+fn sort_json_value(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            // Sort object keys and recursively sort values
+            let mut sorted_entries: Vec<_> = map.iter().collect();
+            sorted_entries.sort_by(|a, b| a.0.cmp(b.0));
+            
+            let mut sorted_map = serde_json::Map::new();
+            for (key, val) in sorted_entries {
+                sorted_map.insert(key.clone(), sort_json_value(val));
+            }
+            serde_json::Value::Object(sorted_map)
+        }
+        serde_json::Value::Array(arr) => {
+            // Recursively sort array elements
+            serde_json::Value::Array(arr.iter().map(sort_json_value).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+// ============================================================================
 // Metrics Snapshot Types
 // ============================================================================
 
@@ -84,7 +110,10 @@ pub struct HistogramSummary {
 
 /// Export metrics as JSON.
 pub fn export_json<W: Write>(snapshot: &MetricsSnapshot, writer: &mut W) -> std::io::Result<()> {
-    serde_json::to_writer_pretty(&mut *writer, snapshot)?;
+    // Sort snapshot for consistent output order
+    let sorted_snapshot = serde_json::to_value(snapshot)?;
+    let sorted = sort_json_value(&sorted_snapshot);
+    serde_json::to_writer_pretty(&mut *writer, &sorted)?;
     writeln!(writer)?;
     Ok(())
 }
@@ -99,7 +128,10 @@ pub fn export_json<W: Write>(snapshot: &MetricsSnapshot, writer: &mut W) -> std:
 /// * `export` - The metrics export containing metrics with their breakdowns.
 /// * `writer` - The writer to output JSON to.
 pub fn export_json_with_specs<W: Write>(export: &MetricsExport, writer: &mut W) -> std::io::Result<()> {
-    serde_json::to_writer_pretty(&mut *writer, export)?;
+    // Sort export for consistent output order
+    let sorted_export = serde_json::to_value(export)?;
+    let sorted = sort_json_value(&sorted_export);
+    serde_json::to_writer_pretty(&mut *writer, &sorted)?;
     writeln!(writer)?;
     Ok(())
 }
