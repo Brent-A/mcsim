@@ -235,10 +235,22 @@ if [[ "$SKIP_ITM" != "true" ]]; then
         # Extract and display release tag
         release_tag=$(echo "$release_info" | grep -o '"tag_name":"[^"]*"' | head -1 | sed 's/"tag_name":"//;s/"$//')
         
+        # If tag_name is not found, try to extract from html_url as fallback
+        if [[ -z "$release_tag" ]]; then
+            release_tag=$(echo "$release_info" | grep -o '"html_url":"[^"]*releases/tag/[^"]*"' | head -1 | sed 's|.*releases/tag/||;s|"$||')
+        fi
+        
         if [[ -z "$release_tag" ]]; then
             echo -e "  ${RED}No release tag found in API response${NC}"
-            echo -e "  ${YELLOW}API response (first 500 chars):${NC}"
-            echo -e "  ${GRAY}$(echo "$release_info" | head -c 500)${NC}"
+            echo -e "  ${YELLOW}API response (first 1000 chars):${NC}"
+            echo -e "  ${GRAY}$(echo "$release_info" | head -c 1000)${NC}"
+            echo -e "  ${YELLOW}Searching for tag_name in full response...${NC}"
+            if echo "$release_info" | grep -q '"tag_name"'; then
+                echo -e "  ${CYAN}Found tag_name field in response (beyond first 1000 chars)${NC}"
+                echo -e "  ${GRAY}$(echo "$release_info" | grep -o '"tag_name":"[^"]*"')${NC}"
+            else
+                echo -e "  ${RED}tag_name field not found anywhere in response${NC}"
+            fi
             echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/${ITM_REPO}${NC}"
             echo -e "  ${YELLOW}Place the compiled libitm.so in: $ITM_DIR${NC}"
             exit 1
