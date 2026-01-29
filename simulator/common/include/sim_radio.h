@@ -52,7 +52,8 @@ public:
     // Statistics interface (used by firmware)
     uint32_t getPacketsRecv() const { return packets_recv_; }
     uint32_t getPacketsSent() const { return packets_sent_; }
-    void resetStats() { packets_recv_ = 0; packets_sent_ = 0; total_tx_airtime_ = 0; total_rx_airtime_ = 0; }
+    uint32_t getPacketsRecvErrors() const { return packets_recv_errors_; }
+    void resetStats() { packets_recv_ = 0; packets_sent_ = 0; packets_recv_errors_ = 0; total_tx_airtime_ = 0; total_rx_airtime_ = 0; }
     uint32_t getTotalTxAirtime() const { return total_tx_airtime_; }
     uint32_t getTotalRxAirtime() const { return total_rx_airtime_; }
     
@@ -100,6 +101,7 @@ private:
     // Statistics
     uint32_t packets_recv_;
     uint32_t packets_sent_;
+    uint32_t packets_recv_errors_;
     uint32_t total_tx_airtime_;
     uint32_t total_rx_airtime_;
     
