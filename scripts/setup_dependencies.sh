@@ -180,8 +180,8 @@ if [[ "$SKIP_ITM" != "true" ]]; then
         # Determine the source repository
         if [[ -n "$ITM_SOURCE" ]]; then
             echo -e "  ${GRAY}ITM library source: $ITM_SOURCE${NC}"
-            # Extract owner/repo from GitHub URL
-            ITM_REPO=$(echo "$ITM_SOURCE" | sed 's|https://github.com/||')
+            # Extract owner/repo from GitHub URL, removing trailing slashes
+            ITM_REPO=$(echo "$ITM_SOURCE" | sed 's|https://github.com/||' | sed 's|/$||')
         else
             echo -e "  ${GRAY}ITM library source: https://github.com/NTIA/itm${NC}"
             ITM_REPO="NTIA/itm"
