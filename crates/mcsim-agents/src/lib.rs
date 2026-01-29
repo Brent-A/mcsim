@@ -699,7 +699,7 @@ impl Agent {
         // Generate message content
         self.message_seq += 1;
         let content = format!("DM {} from {}", self.direct_messages_sent + 1, self.config.name);
-        let timestamp = (ctx.time().as_secs_f64() as u32).wrapping_add(self.message_seq);
+        let timestamp = ctx.time().as_secs_f64() as u32;
         let recipient = PublicKeyPrefix::new(target.public_key_hash());
 
         ctx.tracer().log(TraceEvent::custom(
@@ -814,7 +814,7 @@ impl Agent {
         // Generate message content
         self.message_seq += 1;
         let content = format!("CH {} from {}", self.channel_messages_sent + 1, self.config.name);
-        let timestamp = (ctx.time().as_secs_f64() as u32).wrapping_add(self.message_seq);
+        let timestamp = ctx.time().as_secs_f64() as u32;
 
         debug!(
             "Agent[{}]: Sending to channel {}: {}",
@@ -993,18 +993,16 @@ impl Agent {
         ).increment(1);
 
         // Record delivery latency based on message timestamp
-        // The timestamp is approximately the send time in seconds (with a small sequence offset)
+        // The timestamp is the send time in seconds (truncated to u32)
         let receive_time_secs = ctx.time().as_secs_f64();
         let send_time_secs = msg.timestamp as f64;
         let latency_ms = (receive_time_secs - send_time_secs) * 1000.0;
         
-        // Only record if latency is non-negative (handles cases where timestamp has sequence offset)
-        if latency_ms >= 0.0 {
-            mcsim_metrics::metrics::histogram!(
-                metric_defs::MESSAGE_DELIVERY_LATENCY.name,
-                &self.metrics_labels.to_labels()
-            ).record(latency_ms);
-        }
+        // Record latency (should always be non-negative in normal operation)
+        mcsim_metrics::metrics::histogram!(
+            metric_defs::MESSAGE_DELIVERY_LATENCY.name,
+            &self.metrics_labels.to_labels()
+        ).record(latency_ms);
     }
 
     /// Handle a received channel message.
