@@ -219,6 +219,17 @@ if [[ "$SKIP_ITM" != "true" ]]; then
             echo -e "  ${YELLOW}Place the compiled libitm.so in: $ITM_DIR${NC}"
             exit 1
         else
+            # Extract and display release tag
+            release_tag=$(echo "$release_info" | grep -o '"tag_name":"[^"]*"' | head -1 | sed 's/"tag_name":"//;s/"$//')
+            echo -e "  ${CYAN}Release tag: ${release_tag}${NC}"
+            
+            # Extract and display all available assets
+            echo -e "  ${CYAN}Available assets:${NC}"
+            echo "$release_info" | grep -o '"name":"[^"]*"' | sed 's/"name":"//;s/"$//' | while read -r asset_name; do
+                echo -e "    - ${GRAY}${asset_name}${NC}"
+            done
+            echo ""
+            
             # Try multiple patterns to find Linux binary assets
             # Pattern 1: itm-linux-x86_64.tar.gz (new format)
             linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*itm-linux-x86_64[^"]*\.tar\.gz"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
