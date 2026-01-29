@@ -234,11 +234,11 @@ if [[ "$SKIP_ITM" != "true" ]]; then
         
         # Extract and display release tag
         # The pattern must account for optional spaces after the colon
-        release_tag=$(echo "$release_info" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//;s/"$//')
+        release_tag=$(echo "$release_info" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
         
         # If tag_name is not found, try to extract from html_url as fallback
         if [[ -z "$release_tag" ]]; then
-            release_tag=$(echo "$release_info" | grep -o '"html_url"[[:space:]]*:[[:space:]]*"[^"]*releases/tag/[^"]*"' | sed 's|.*releases/tag/||;s|"$||')
+            release_tag=$(echo "$release_info" | grep -o '"html_url"[[:space:]]*:[[:space:]]*"[^"]*releases/tag/[^"]*"' | sed 's|.*releases/tag/||;s|"$||' | head -1)
         fi
         
         if [[ -z "$release_tag" ]]; then
