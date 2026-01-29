@@ -233,11 +233,12 @@ if [[ "$SKIP_ITM" != "true" ]]; then
         fi
         
         # Extract and display release tag
-        release_tag=$(echo "$release_info" | grep -o '"tag_name":"[^"]*"' | head -1 | sed 's/"tag_name":"//;s/"$//')
+        # The pattern must account for optional spaces after the colon
+        release_tag=$(echo "$release_info" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//;s/"$//')
         
         # If tag_name is not found, try to extract from html_url as fallback
         if [[ -z "$release_tag" ]]; then
-            release_tag=$(echo "$release_info" | grep -o '"html_url":"[^"]*releases/tag/[^"]*"' | head -1 | sed 's|.*releases/tag/||;s|"$||')
+            release_tag=$(echo "$release_info" | grep -o '"html_url"[[:space:]]*:[[:space:]]*"[^"]*releases/tag/[^"]*"' | sed 's|.*releases/tag/||;s|"$||')
         fi
         
         if [[ -z "$release_tag" ]]; then
@@ -247,7 +248,7 @@ if [[ "$SKIP_ITM" != "true" ]]; then
             echo -e "  ${YELLOW}Searching for tag_name in full response...${NC}"
             if echo "$release_info" | grep -q '"tag_name"'; then
                 echo -e "  ${CYAN}Found tag_name field in response (beyond first 1000 chars)${NC}"
-                echo -e "  ${GRAY}$(echo "$release_info" | grep -o '"tag_name":"[^"]*"')${NC}"
+                echo -e "  ${GRAY}$(echo "$release_info" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"')${NC}"
             else
                 echo -e "  ${RED}tag_name field not found anywhere in response${NC}"
             fi
@@ -260,38 +261,38 @@ if [[ "$SKIP_ITM" != "true" ]]; then
         
         # Extract and display all available assets
         echo -e "  ${CYAN}Available assets:${NC}"
-        echo "$release_info" | grep -o '"name":"[^"]*"' | sed 's/"name":"//;s/"$//' | while read -r asset_name; do
+        echo "$release_info" | grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"name"[[:space:]]*:[[:space:]]*"//;s/"$//' | while read -r asset_name; do
             echo -e "    - ${GRAY}${asset_name}${NC}"
         done
         echo ""
         
         # Try multiple patterns to find Linux binary assets
         # Pattern 1: itm-linux-x86_64.tar.gz (new format)
-        linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*itm-linux-x86_64[^"]*\.tar\.gz"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+        linux_asset=$(echo "$release_info" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*itm-linux-x86_64[^"]*\.tar\.gz"' | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
             
             if [[ -z "$linux_asset" ]]; then
                 # Pattern 2: linux-x86_64.zip or linux-x86_64.tar.gz
-                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*linux-x86_64[^"]*\.\(zip\|tar\.gz\)"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*linux-x86_64[^"]*\.\(zip\|tar\.gz\)"' | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
             fi
             
             if [[ -z "$linux_asset" ]]; then
                 # Pattern 3: linux_x86_64.zip or tar.gz
-                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*linux_x86_64[^"]*\.\(zip\|tar\.gz\)"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*linux_x86_64[^"]*\.\(zip\|tar\.gz\)"' | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
             fi
             
             if [[ -z "$linux_asset" ]]; then
                 # Pattern 4: linux.zip, Linux.zip, linux.tar.gz, or Linux.tar.gz
-                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*[Ll]inux[^"]*\.\(zip\|tar\.gz\)"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*[Ll]inux[^"]*\.\(zip\|tar\.gz\)"' | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
             fi
             
             if [[ -z "$linux_asset" ]]; then
                 # Pattern 5: Any file with x86_64 (zip or tar.gz)
-                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*x86_64[^"]*\.\(zip\|tar\.gz\)"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*x86_64[^"]*\.\(zip\|tar\.gz\)"' | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
             fi
             
             if [[ -z "$linux_asset" ]]; then
                 # Pattern 6: Any .so file directly
-                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*\.so"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*\.so"' | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
             fi
             
             if [[ -n "$linux_asset" ]]; then
