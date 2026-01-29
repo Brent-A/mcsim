@@ -26,7 +26,7 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
     
     - name: Setup dependencies
-      run: bash scripts/setup_dependencies.sh --skip-rerun --skip-dem
+      run: bash scripts/setup_dependencies.sh --skip-rerun --skip-dem --itm-source https://github.com/usrflo/itm-linux
     
     - name: Cache cargo build
       uses: Swatinem/rust-cache@v2

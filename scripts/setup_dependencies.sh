@@ -20,6 +20,7 @@
 #     --include-dem           Include DEM data files
 #     --skip-itm              Skip downloading the ITM library
 #     --skip-rerun            Skip downloading the Rerun viewer (optional dependency)
+#     --itm-source URL        Alternative GitHub repo URL for ITM library (e.g., https://github.com/usrflo/itm-linux)
 #     --dem-csv-path PATH     Path to the CSV file describing DEM tiles to download (default: dem_data/data.csv)
 #     --force                 Force re-download of dependencies even if they already exist
 #
@@ -32,6 +33,9 @@
 #
 #     ./setup_dependencies.sh --force
 #         Re-downloads all dependencies even if they exist.
+#
+#     ./setup_dependencies.sh --itm-source https://github.com/usrflo/itm-linux
+#         Uses alternative source for ITM library (for Linux/macOS binaries).
 #
 
 set -e
@@ -50,6 +54,7 @@ SKIP_ITM=false
 SKIP_RERUN=false
 DEM_CSV_PATH=""
 FORCE=false
+ITM_SOURCE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -68,6 +73,10 @@ while [[ $# -gt 0 ]]; do
         --skip-rerun)
             SKIP_RERUN=true
             shift
+            ;;
+        --itm-source)
+            ITM_SOURCE="$2"
+            shift 2
             ;;
         --dem-csv-path)
             DEM_CSV_PATH="$2"
@@ -168,7 +177,15 @@ if [[ "$SKIP_ITM" != "true" ]]; then
         echo -e "  ${GREEN}ITM library already exists at $ITM_LIB${NC}"
         echo -e "  ${GRAY}Use --force to re-download${NC}"
     else
-        echo -e "  ${GRAY}ITM library source: https://github.com/NTIA/itm${NC}"
+        # Determine the source repository
+        if [[ -n "$ITM_SOURCE" ]]; then
+            echo -e "  ${GRAY}ITM library source: $ITM_SOURCE${NC}"
+            # Extract owner/repo from GitHub URL
+            ITM_REPO=$(echo "$ITM_SOURCE" | sed 's|https://github.com/||')
+        else
+            echo -e "  ${GRAY}ITM library source: https://github.com/NTIA/itm${NC}"
+            ITM_REPO="NTIA/itm"
+        fi
         
         # Create itm directory
         if [[ ! -d "$ITM_DIR" ]]; then
@@ -176,7 +193,7 @@ if [[ "$SKIP_ITM" != "true" ]]; then
         fi
         
         # Fetch latest release from GitHub
-        ITM_RELEASES_URL="https://api.github.com/repos/NTIA/itm/releases/latest"
+        ITM_RELEASES_URL="https://api.github.com/repos/${ITM_REPO}/releases/latest"
         
         echo -e "  ${YELLOW}Fetching latest ITM release info...${NC}"
         
@@ -184,7 +201,7 @@ if [[ "$SKIP_ITM" != "true" ]]; then
         
         if [[ -z "$release_info" ]]; then
             echo -e "  ${RED}Failed to fetch ITM release info${NC}"
-            echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/NTIA/itm${NC}"
+            echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/${ITM_REPO}${NC}"
             echo -e "  ${YELLOW}Place the compiled libitm.so in: $ITM_DIR${NC}"
         else
             # Find the Linux x86_64 asset
@@ -204,7 +221,7 @@ if [[ "$SKIP_ITM" != "true" ]]; then
                 fi
             else
                 echo -e "  ${YELLOW}No pre-built Linux binary found in latest release.${NC}"
-                echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/NTIA/itm${NC}"
+                echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/${ITM_REPO}${NC}"
                 echo -e "  ${YELLOW}Place the compiled libitm.so in: $ITM_DIR${NC}"
             fi
         fi
