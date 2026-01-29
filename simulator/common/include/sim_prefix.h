@@ -89,7 +89,7 @@ extern thread_local EnvironmentSensorManager _sim_sensors_instance;
     _Pragma("push_macro(\"board\")") \
     _Pragma("push_macro(\"radio_driver\")") \
     _Pragma("push_macro(\"rtc_clock\")") \
-    _Pragma("push_macro(\"sensors\")") \
+                _Pragma("push_macro(\"sensors\")") \
     _Pragma("warning(push)") \
     _Pragma("warning(disable: 4005)") \
     /* Undefine to allow parameter names */ \
@@ -99,8 +99,8 @@ extern thread_local EnvironmentSensorManager _sim_sensors_instance;
     _Pragma("warning(pop)") \
     _Pragma("pop_macro(\"sensors\")") \
     _Pragma("pop_macro(\"rtc_clock\")") \
-    _Pragma("pop_macro(\"radio_driver\")") \
-    _Pragma("pop_macro(\"board\")")
+                _Pragma("pop_macro(\"radio_driver\")") \
+                    _Pragma("pop_macro(\"board\")")
 
 // For headers with conflicting parameter names, we need to #undef before include
 // This is handled in sim_compat.h which wraps problematic includes
@@ -111,12 +111,18 @@ extern thread_local EnvironmentSensorManager _sim_sensors_instance;
 // Arduino min/max compatibility - OUTSIDE include guard
 // ============================================================================
 // These are defined outside the include guard so they get redefined every time
-// this header is force-included. This ensures they survive any #undef in 
+// this header is force-included. This ensures they survive any #undef in
 // system headers like <algorithm> or <windows.h>
 //
 // NOTE: We do NOT define 'abs' as a macro because it breaks MSVC's <chrono>
 // and other standard library headers. Arduino code should use std::abs or
 // the standard abs() function.
+//
+// LINUX COMPATIBILITY: On Linux with GCC, we must provide min/max in a way
+// that doesn't break std::min/std::max in STL headers. We do this by:
+// 1. Defining inline functions in global namespace (not macros)
+// 2. These functions can be found via ADL when called unqualified
+// 3. On Windows, we still use macros for MSVC compatibility
 
 // Only define if we have a compiler that supports this approach
 #ifdef __cplusplus
@@ -144,12 +150,44 @@ inline auto _sim_max_impl(T a, U b) -> typename std::common_type<T, U>::type {
 
 #endif // _SIM_MIN_MAX_IMPL_DEFINED
 
-// Force-define min/max macros (not abs - it breaks STL)
+// Platform-specific min/max handling
+#ifdef _WIN32
+// On Windows, use macros for Arduino compatibility (MSVC expects this)
 #undef min
 #undef max
 
 #define min(a, b) _sim_min_impl(a, b)
 #define max(a, b) _sim_max_impl(a, b)
+#else
+// On Linux/Unix, provide min/max as inline functions with proper overloads
+// This allows third-party code to call min()/max() without macro conflicts with STL
+// Using template specialization to avoid type redefinition issues
+
+#ifndef _SIM_OVERLOADS_DEFINED
+#define _SIM_OVERLOADS_DEFINED
+
+// Use a template-based approach that avoids redefinition on platforms where
+// size_t == unsigned long
+inline int min(int a, int b) { return (a < b) ? a : b; }
+inline int max(int a, int b) { return (a > b) ? a : b; }
+inline long min(long a, long b) { return (a < b) ? a : b; }
+inline long max(long a, long b) { return (a > b) ? a : b; }
+inline unsigned int min(unsigned int a, unsigned int b) { return (a < b) ? a : b; }
+inline unsigned int max(unsigned int a, unsigned int b) { return (a > b) ? a : b; }
+inline double min(double a, double b) { return (a < b) ? a : b; }
+inline double max(double a, double b) { return (a > b) ? a : b; }
+inline float min(float a, float b) { return (a < b) ? a : b; }
+inline float max(float a, float b) { return (a > b) ? a : b; }
+
+// Template versions for any other types
+template <typename T>
+inline T min(T a, T b) { return (a < b) ? a : b; }
+template <typename T>
+inline T max(T a, T b) { return (a > b) ? a : b; }
+
+#endif // _SIM_OVERLOADS_DEFINED
+
+#endif // _WIN32
 
 // abs: just bring std::abs into scope (don't use macro)
 using std::abs;

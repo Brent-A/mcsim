@@ -48,7 +48,7 @@ pub struct Itm {
 impl Itm {
     /// Load the ITM library from the default location
     ///
-    /// This searches for `itm.dll` in the following locations:
+    /// This searches for the itm library in the following locations:
     /// 1. The `itm` directory relative to the executable
     /// 2. The current working directory
     /// 3. System PATH
@@ -59,6 +59,16 @@ impl Itm {
             "itm.dll",
             "../itm/itm.dll",
             "../../itm/itm.dll",
+
+            "itm/libitm.so",
+            "libitm.so",
+            "../itm/libitm.so",
+            "../../itm/libitm.so",
+
+            "itm/libitm.dylib",
+            "libitm.dylib",
+            "../itm/libitm.dylib",
+            "../../itm/libitm.dylib",
         ];
 
         for path in &possible_paths {

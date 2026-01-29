@@ -18,6 +18,7 @@
 
 #include <mutex>
 #include <condition_variable>
+#include <cstring>
 #include <thread>
 #include <atomic>
 #include <queue>
@@ -37,21 +38,21 @@ struct SpinDetectionConfig {
     /// Number of consecutive polls without state change before yielding.
     /// Default: 3 polls (matching original hardcoded behavior).
     int threshold = 3;
-    
+
     /// Enable debug logging when spin is detected.
     /// When true, logs a message each time spin detection triggers.
     bool log_spin_detection = false;
-    
+
     /// Enable debug logging for loop iterations per step.
     /// When true, logs the number of loop iterations at step end.
     bool log_loop_iterations = false;
-    
+
     /// Track total spin detections for metrics/debugging.
     uint32_t spin_detection_count = 0;
-    
+
     /// Track loop iterations for the current step (reset each step).
     uint32_t loop_iterations_this_step = 0;
-    
+
     /// Track total loop iterations across all steps.
     uint64_t total_loop_iterations = 0;
 };
@@ -64,25 +65,25 @@ struct SpinDetectionConfig {
 
 struct WakeTimeRegistry {
     std::set<uint64_t> pending_wake_times;
-    
+
     void registerWakeTime(uint64_t millis) {
         pending_wake_times.insert(millis);
     }
-    
+
     uint64_t getNextWakeTime() const {
         if (pending_wake_times.empty()) {
             return UINT64_MAX;
         }
         return *pending_wake_times.begin();
     }
-    
+
     void clearExpired(uint64_t current_millis) {
         auto it = pending_wake_times.begin();
         while (it != pending_wake_times.end() && *it <= current_millis) {
             it = pending_wake_times.erase(it);
         }
     }
-    
+
     void clear() {
         pending_wake_times.clear();
     }
@@ -104,32 +105,32 @@ struct SimContext {
     SimRNG rng;
     SimSerial serial;
     SimFilesystem filesystem;
-    
+
     // Wake time registry for deterministic time advancement
     WakeTimeRegistry wake_registry;
-    
+
     // Spin detection configuration for deterministic work per step
     SpinDetectionConfig spin_config;
-    
+
     // Current simulation time
     uint64_t current_millis;
     uint32_t current_rtc_secs;
-    
+
     // Step result (accumulated during step)
     SimStepResult step_result;
-    
+
     // Log buffer for Serial output
     std::string log_buffer;
     std::mutex log_mutex;
-    
+
     // Serial TX buffer
     std::vector<uint8_t> serial_tx_buffer;
     std::mutex serial_tx_mutex;
-    
+
     // Thread synchronization
     std::mutex step_mutex;
     std::condition_variable step_cv;
-    
+
     enum class State {
         IDLE,           // Waiting for step_begin
         RUNNING,        // Processing loop
@@ -137,31 +138,31 @@ struct SimContext {
         SHUTDOWN        // Thread should exit
     };
     std::atomic<State> state{State::IDLE};
-    
+
     // Initialization
     SimContext() : current_millis(0), current_rtc_secs(0) {
         memset(&step_result, 0, sizeof(step_result));
     }
-    
+
     // Append to log buffer (called by Serial.print stub)
     void appendLog(const char* str, size_t len) {
         std::lock_guard<std::mutex> lock(log_mutex);
         log_buffer.append(str, len);
     }
-    
+
     // Append to serial TX buffer
     void appendSerialTx(const uint8_t* data, size_t len) {
         std::lock_guard<std::mutex> lock(serial_tx_mutex);
         serial_tx_buffer.insert(serial_tx_buffer.end(), data, data + len);
     }
-    
+
     // Get current serial TX buffer size (for output tracking)
     size_t getSerialTxBufferSize() const {
         // Note: This method is intended to be called from the same thread
         // that writes to the buffer (during loop execution), so no lock needed
         return serial_tx_buffer.size();
     }
-    
+
     // Collect accumulated output into step_result
     void finalizeStepResult() {
         // Copy log buffer
@@ -174,7 +175,7 @@ struct SimContext {
             step_result.log_output_len = copy_len;
             log_buffer.clear();
         }
-        
+
         // Copy serial TX buffer
         {
             std::lock_guard<std::mutex> lock(serial_tx_mutex);
@@ -183,7 +184,7 @@ struct SimContext {
             step_result.serial_tx_len = copy_len;
             serial_tx_buffer.clear();
         }
-        
+
         step_result.current_millis = current_millis;
     }
 };

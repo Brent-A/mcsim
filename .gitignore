@@ -38,6 +38,7 @@ release/
 # Downloaded dependencies (from setup_dependencies.ps1)
 # Keep the itm/ and rerun/ directories but ignore their contents
 itm/*.dll
+itm/*.so
 rerun/*.exe
 dem_data/*.tif
 

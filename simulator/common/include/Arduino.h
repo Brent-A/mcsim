@@ -59,13 +59,15 @@ inline T arduino_max(T a, T b) { return (a > b) ? a : b; }
 // NOTE: arduino_abs is intentionally NOT a macro - use std::abs instead
 // Defining abs as macro breaks MSVC's standard library headers
 
-// Only define min/max macros (NOT abs - it breaks STL)
+// Only define min/max macros on Windows (NOT abs - it breaks STL)
+#ifdef _WIN32
 #ifndef ARDUINO_NO_MACROS
-  // Force define (undef first in case Windows defined them)
-  #undef min
-  #undef max
+// Force define (undef first in case Windows defined them)
+#undef min
+#undef max
   #define min(a,b) arduino_min(a,b)
   #define max(a,b) arduino_max(a,b)
+#endif
 #endif
 
 // constrain with different types - use common_type to handle mixed int/float
@@ -97,6 +99,58 @@ inline long random(long min, long max) {
 
 inline void randomSeed(unsigned long seed) {
     srand(static_cast<unsigned int>(seed));
+}
+
+// ============================================================================
+// String Conversion Functions (Arduino compatibility)
+// ============================================================================
+
+// ltoa: convert long to ASCII (not available on Linux/GCC by default)
+inline char *ltoa(long value, char *str, int radix)
+{
+    if (!str || radix < 2 || radix > 36)
+    {
+        return str;
+    }
+
+    char *ptr = str;
+    char *end = str;
+    long v = value;
+
+    // Handle negative numbers
+    if (value < 0 && radix == 10)
+    {
+        *ptr++ = '-';
+        v = -value;
+    }
+
+    // Convert to string (in reverse)
+    do
+    {
+        int digit = v % radix;
+        *ptr++ = (digit < 10) ? (char)('0' + digit) : (char)('a' + digit - 10);
+        v /= radix;
+    } while (v > 0);
+
+    *ptr = '\0';
+    end = ptr;
+    ptr = (value < 0 && radix == 10) ? str + 1 : str;
+
+    // Reverse the string
+    while (ptr < end - 1)
+    {
+        char tmp = *ptr;
+        *ptr++ = *--end;
+        *end = tmp;
+    }
+
+    return str;
+}
+
+// itoa: convert int to ASCII
+inline char *itoa(int value, char *str, int radix)
+{
+    return ltoa((long)value, str, radix);
 }
 
 // ============================================================================
@@ -143,37 +197,37 @@ public:
     String(const String& other);
     String(String&& other) noexcept;
     ~String();
-    
+
     String& operator=(const String& other);
     String& operator=(String&& other) noexcept;
     String& operator=(const char* str);
-    
+
     String& operator+=(const String& other);
     String& operator+=(const char* str);
     String& operator+=(char c);
-    
+
     bool operator==(const String& other) const;
     bool operator==(const char* str) const;
     bool operator!=(const String& other) const { return !(*this == other); }
     bool operator!=(const char* str) const { return !(*this == str); }
-    
+
     char operator[](unsigned int index) const;
     char& operator[](unsigned int index);
-    
+
     const char* c_str() const { return buffer_ ? buffer_ : ""; }
     unsigned int length() const { return len_; }
     bool isEmpty() const { return len_ == 0; }
-    
+
     void reserve(unsigned int size);
-    
+
     int indexOf(char c) const;
     int indexOf(const char* str) const;
     String substring(unsigned int from, unsigned int to = 0xFFFFFFFF) const;
-    
+
     void trim();
     void toLowerCase();
     void toUpperCase();
-    
+
     long toInt() const;
     float toFloat() const;
 
@@ -181,7 +235,7 @@ private:
     char* buffer_;
     unsigned int len_;
     unsigned int capacity_;
-    
+
     void ensureCapacity(unsigned int cap);
 };
 
@@ -202,7 +256,7 @@ class Print {
 public:
     virtual size_t write(uint8_t) = 0;
     virtual size_t write(const uint8_t* buffer, size_t size);
-    
+
     size_t print(const char* str);
     size_t print(char c);
     size_t print(int n, int base = DEC);
@@ -211,7 +265,7 @@ public:
     size_t print(unsigned long n, int base = DEC);
     size_t print(double n, int digits = 2);
     size_t print(const String& str);
-    
+
     size_t println();
     size_t println(const char* str);
     size_t println(char c);
@@ -221,7 +275,7 @@ public:
     size_t println(unsigned long n, int base = DEC);
     size_t println(double n, int digits = 2);
     size_t println(const String& str);
-    
+
     size_t printf(const char* format, ...);
 };
 
@@ -240,10 +294,10 @@ public:
     size_t readBytes(char* buffer, size_t length) {
         return readBytes((uint8_t*)buffer, length);
     }
-    
+
     String readString();
     String readStringUntil(char terminator);
-    
+
     void setTimeout(unsigned long timeout) { timeout_ = timeout; }
     unsigned long getTimeout() const { return timeout_; }
 
@@ -258,18 +312,18 @@ protected:
 class HardwareSerial : public Stream {
 public:
     HardwareSerial(int uart_nr = 0) : uart_nr_(uart_nr) {}
-    
+
     void begin(unsigned long baud, uint32_t config = 0, int8_t rxPin = -1, int8_t txPin = -1);
     void end();
-    
+
     int available() override;
     int read() override;
     int peek() override;
     size_t write(uint8_t c) override;
     size_t write(const uint8_t* buffer, size_t size) override;
-    
+
     void flush();
-    
+
     operator bool() const { return true; }
 
 private:
@@ -284,17 +338,17 @@ class SimSerialClass : public Stream {
 public:
     void begin(unsigned long baud) { (void)baud; }
     void end() {}
-    
+
     int available() override;
     int read() override;
     int peek() override;
-    
+
     size_t write(uint8_t c) override;
     size_t write(const uint8_t* buffer, size_t size) override;
     size_t write(const char* str) { return write((const uint8_t*)str, strlen(str)); }
-    
+
     void flush() {}
-    
+
     operator bool() const { return true; }
 };
 
@@ -315,7 +369,7 @@ public:
     SPISettings() : clock_(1000000), bitOrder_(MSBFIRST), dataMode_(SPI_MODE0) {}
     SPISettings(uint32_t clock, uint8_t bitOrder, uint8_t dataMode)
         : clock_(clock), bitOrder_(bitOrder), dataMode_(dataMode) {}
-    
+
     uint32_t clock_;
     uint8_t bitOrder_;
     uint8_t dataMode_;
@@ -324,19 +378,19 @@ public:
 class SPIClass {
 public:
     SPIClass(uint8_t spi_bus = 0) : spi_bus_(spi_bus) {}
-    
+
     void begin(int8_t sck = -1, int8_t miso = -1, int8_t mosi = -1, int8_t ss = -1) {
         (void)sck; (void)miso; (void)mosi; (void)ss;
     }
     void end() {}
-    
+
     void beginTransaction(SPISettings settings) { (void)settings; }
     void endTransaction() {}
-    
+
     uint8_t transfer(uint8_t data) { (void)data; return 0; }
     uint16_t transfer16(uint16_t data) { (void)data; return 0; }
     void transfer(void* buf, size_t count) { (void)buf; (void)count; }
-    
+
     void setBitOrder(uint8_t bitOrder) { (void)bitOrder; }
     void setDataMode(uint8_t dataMode) { (void)dataMode; }
     void setClockDivider(uint8_t clockDiv) { (void)clockDiv; }
@@ -354,21 +408,21 @@ extern SPIClass SPI;
 class TwoWire {
 public:
     TwoWire(uint8_t bus = 0) : bus_(bus) {}
-    
+
     void begin(int sda = -1, int scl = -1) { (void)sda; (void)scl; }
     void end() {}
-    
+
     void beginTransmission(uint8_t address) { (void)address; }
     uint8_t endTransmission(bool sendStop = true) { (void)sendStop; return 0; }
-    
+
     size_t write(uint8_t data) { (void)data; return 1; }
     size_t write(const uint8_t* data, size_t len) { (void)data; (void)len; return len; }
-    
+
     uint8_t requestFrom(uint8_t address, uint8_t quantity, bool sendStop = true) {
         (void)address; (void)quantity; (void)sendStop;
         return 0;
     }
-    
+
     int available() { return 0; }
     int read() { return -1; }
 
@@ -419,10 +473,11 @@ inline void neopixelWrite(uint8_t pin, uint8_t r, uint8_t g, uint8_t b) {
 }
 
 // ============================================================================
-// Arduino min/max macros - MUST BE DEFINED LAST  
+// Arduino min/max macros - Windows only
 // ============================================================================
-// These are re-defined here at the end of the file to ensure they survive
-// any #undef that might happen in included headers like <algorithm>
+// On Windows (MSVC), define min/max macros for Arduino compatibility.
+// On Linux/GCC, these macros break std::min/std::max in STL headers like stl_deque.h,
+// so we avoid defining them. The inline template functions below are still available.
 // NOTE: abs is NOT defined as macro - use std::abs instead (macro breaks STL)
 
 // Template implementations - use guard to avoid redefinition
@@ -443,9 +498,12 @@ inline auto _sim_max_impl(T a, U b) -> typename std::common_type<T, U>::type {
 
 #endif // _SIM_MIN_MAX_IMPL_DEFINED
 
+// Only define min/max macros on Windows where NOMINMAX is in effect
+#ifdef _WIN32
 // Force-define min/max macros (undef any existing definitions first)
 #undef min
 #undef max
 
 #define min(a, b) _sim_min_impl(a, b)
 #define max(a, b) _sim_max_impl(a, b)
+#endif // _WIN32
