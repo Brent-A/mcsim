@@ -128,7 +128,7 @@ download_file() {
     fi
 }
 
-# Helper function to extract a zip file
+# Helper function to extract archive files (zip or tar.gz)
 extract_archive() {
     local archive_path="$1"
     local destination_path="$2"
@@ -139,11 +139,25 @@ extract_archive() {
         mkdir -p "$destination_path"
     fi
     
-    if unzip -q -o "$archive_path" -d "$destination_path"; then
-        echo -e "    ${GREEN}Done!${NC}"
-        return 0
+    # Determine archive type by extension
+    if [[ "$archive_path" == *.tar.gz ]] || [[ "$archive_path" == *.tgz ]]; then
+        if tar -xzf "$archive_path" -C "$destination_path"; then
+            echo -e "    ${GREEN}Done!${NC}"
+            return 0
+        else
+            echo -e "    ${RED}Failed to extract tar.gz archive${NC}"
+            return 1
+        fi
+    elif [[ "$archive_path" == *.zip ]]; then
+        if unzip -q -o "$archive_path" -d "$destination_path"; then
+            echo -e "    ${GREEN}Done!${NC}"
+            return 0
+        else
+            echo -e "    ${RED}Failed to extract zip archive${NC}"
+            return 1
+        fi
     else
-        echo -e "    ${RED}Failed to extract archive${NC}"
+        echo -e "    ${RED}Unsupported archive format: $archive_path${NC}"
         return 1
     fi
 }
@@ -206,33 +220,38 @@ if [[ "$SKIP_ITM" != "true" ]]; then
             exit 1
         else
             # Try multiple patterns to find Linux binary assets
-            # Pattern 1: linux-x86_64.zip
-            linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*linux-x86_64[^"]*\.zip"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+            # Pattern 1: itm-linux-x86_64.tar.gz (new format)
+            linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*itm-linux-x86_64[^"]*\.tar\.gz"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
             
             if [[ -z "$linux_asset" ]]; then
-                # Pattern 2: linux_x86_64.zip
-                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*linux_x86_64[^"]*\.zip"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+                # Pattern 2: linux-x86_64.zip or linux-x86_64.tar.gz
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*linux-x86_64[^"]*\.\(zip\|tar\.gz\)"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
             fi
             
             if [[ -z "$linux_asset" ]]; then
-                # Pattern 3: linux.zip or Linux.zip
-                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*[Ll]inux[^"]*\.zip"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+                # Pattern 3: linux_x86_64.zip or tar.gz
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*linux_x86_64[^"]*\.\(zip\|tar\.gz\)"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
             fi
             
             if [[ -z "$linux_asset" ]]; then
-                # Pattern 4: Any zip file with x86_64
-                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*x86_64[^"]*\.zip"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+                # Pattern 4: linux.zip, Linux.zip, linux.tar.gz, or Linux.tar.gz
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*[Ll]inux[^"]*\.\(zip\|tar\.gz\)"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
             fi
             
             if [[ -z "$linux_asset" ]]; then
-                # Pattern 5: Any .so file directly
+                # Pattern 5: Any file with x86_64 (zip or tar.gz)
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*x86_64[^"]*\.\(zip\|tar\.gz\)"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+            fi
+            
+            if [[ -z "$linux_asset" ]]; then
+                # Pattern 6: Any .so file directly
                 linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*\.so"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
             fi
             
             if [[ -n "$linux_asset" ]]; then
                 echo -e "  ${CYAN}Found asset: $linux_asset${NC}"
                 
-                # Check if it's a .so file or a .zip file
+                # Check if it's a .so file or an archive file
                 if [[ "$linux_asset" == *.so ]]; then
                     # Download .so file directly
                     if download_file "$linux_asset" "$ITM_LIB" "ITM library"; then
@@ -242,11 +261,11 @@ if [[ "$SKIP_ITM" != "true" ]]; then
                         exit 1
                     fi
                 else
-                    # Download and extract zip
-                    zip_path="$ITM_DIR/itm_temp.zip"
-                    if download_file "$linux_asset" "$zip_path" "ITM release"; then
-                        if extract_archive "$zip_path" "$ITM_DIR"; then
-                            rm -f "$zip_path"
+                    # Download and extract archive (zip or tar.gz)
+                    archive_path="$ITM_DIR/itm_temp_archive"
+                    if download_file "$linux_asset" "$archive_path" "ITM release"; then
+                        if extract_archive "$archive_path" "$ITM_DIR"; then
+                            rm -f "$archive_path"
                             
                             # Verify the library file exists after extraction
                             if [[ -f "$ITM_LIB" ]]; then
