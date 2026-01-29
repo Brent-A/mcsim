@@ -25,6 +25,9 @@ jobs:
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
     
+    - name: Setup dependencies
+      run: ./scripts/setup_dependencies.sh --skip-rerun --skip-dem
+    
     - name: Cache cargo build
       uses: Swatinem/rust-cache@v2
     
