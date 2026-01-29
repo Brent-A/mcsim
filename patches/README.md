@@ -29,11 +29,11 @@ git checkout .
 
 This patch is based on upstream MeshCore commit:
 
-- **Commit:** `6b52fb32301c273fc78d96183501eb23ad33c5bb`
+- **Commit:** `e738a7477737964464038a87b3113a7a0ce7ebbc`
 - **Upstream:** <https://github.com/meshcore-dev/MeshCore.git>
-- **Description:** Merge pull request #1310 from LitBomb/patch-22
+- **Description:** Merge branch 'dev' (v1.12.0)
 
-The submodule points to our fork (<https://github.com/Brent-A/MeshCore.git>) which has these changes already applied at commit `266758fa89ddcc619d253b14f425ff5fdda0fd35`.
+The submodule points to our fork (<https://github.com/Brent-A/MeshCore.git>) which has these changes already applied at commit `980693bd29eeae03c6bdeffdf376d50f0b793e5e`.
 
 ### Notes
 
