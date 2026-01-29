@@ -262,7 +262,15 @@ if [[ "$SKIP_ITM" != "true" ]]; then
                     fi
                 else
                     # Download and extract archive (zip or tar.gz)
-                    archive_path="$ITM_DIR/itm_temp_archive"
+                    # Preserve the file extension for proper extraction
+                    if [[ "$linux_asset" == *.tar.gz ]]; then
+                        archive_path="$ITM_DIR/itm_temp.tar.gz"
+                    elif [[ "$linux_asset" == *.zip ]]; then
+                        archive_path="$ITM_DIR/itm_temp.zip"
+                    else
+                        archive_path="$ITM_DIR/itm_temp_archive"
+                    fi
+                    
                     if download_file "$linux_asset" "$archive_path" "ITM release"; then
                         if extract_archive "$archive_path" "$ITM_DIR"; then
                             rm -f "$archive_path"
