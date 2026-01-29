@@ -210,29 +210,52 @@ if [[ "$SKIP_ITM" != "true" ]]; then
         ITM_RELEASES_URL="https://api.github.com/repos/${ITM_REPO}/releases/latest"
         
         echo -e "  ${YELLOW}Fetching latest ITM release info...${NC}"
+        echo -e "  ${GRAY}API URL: ${ITM_RELEASES_URL}${NC}"
         
         release_info=$(curl -s "$ITM_RELEASES_URL" 2>/dev/null)
         
         if [[ -z "$release_info" ]]; then
-            echo -e "  ${RED}Failed to fetch ITM release info${NC}"
+            echo -e "  ${RED}Failed to fetch ITM release info (empty response)${NC}"
             echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/${ITM_REPO}${NC}"
             echo -e "  ${YELLOW}Place the compiled libitm.so in: $ITM_DIR${NC}"
             exit 1
-        else
-            # Extract and display release tag
-            release_tag=$(echo "$release_info" | grep -o '"tag_name":"[^"]*"' | head -1 | sed 's/"tag_name":"//;s/"$//')
-            echo -e "  ${CYAN}Release tag: ${release_tag}${NC}"
-            
-            # Extract and display all available assets
-            echo -e "  ${CYAN}Available assets:${NC}"
-            echo "$release_info" | grep -o '"name":"[^"]*"' | sed 's/"name":"//;s/"$//' | while read -r asset_name; do
-                echo -e "    - ${GRAY}${asset_name}${NC}"
-            done
-            echo ""
-            
-            # Try multiple patterns to find Linux binary assets
-            # Pattern 1: itm-linux-x86_64.tar.gz (new format)
-            linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*itm-linux-x86_64[^"]*\.tar\.gz"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+        fi
+        
+        # Check if the API returned an error message
+        api_error=$(echo "$release_info" | grep -o '"message":"[^"]*"' | head -1 | sed 's/"message":"//;s/"$//')
+        if [[ -n "$api_error" ]]; then
+            echo -e "  ${RED}GitHub API Error: ${api_error}${NC}"
+            echo -e "  ${YELLOW}Full API response (first 500 chars):${NC}"
+            echo -e "  ${GRAY}$(echo "$release_info" | head -c 500)${NC}"
+            echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/${ITM_REPO}${NC}"
+            echo -e "  ${YELLOW}Place the compiled libitm.so in: $ITM_DIR${NC}"
+            exit 1
+        fi
+        
+        # Extract and display release tag
+        release_tag=$(echo "$release_info" | grep -o '"tag_name":"[^"]*"' | head -1 | sed 's/"tag_name":"//;s/"$//')
+        
+        if [[ -z "$release_tag" ]]; then
+            echo -e "  ${RED}No release tag found in API response${NC}"
+            echo -e "  ${YELLOW}API response (first 500 chars):${NC}"
+            echo -e "  ${GRAY}$(echo "$release_info" | head -c 500)${NC}"
+            echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/${ITM_REPO}${NC}"
+            echo -e "  ${YELLOW}Place the compiled libitm.so in: $ITM_DIR${NC}"
+            exit 1
+        fi
+        
+        echo -e "  ${CYAN}Release tag: ${release_tag}${NC}"
+        
+        # Extract and display all available assets
+        echo -e "  ${CYAN}Available assets:${NC}"
+        echo "$release_info" | grep -o '"name":"[^"]*"' | sed 's/"name":"//;s/"$//' | while read -r asset_name; do
+            echo -e "    - ${GRAY}${asset_name}${NC}"
+        done
+        echo ""
+        
+        # Try multiple patterns to find Linux binary assets
+        # Pattern 1: itm-linux-x86_64.tar.gz (new format)
+        linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*itm-linux-x86_64[^"]*\.tar\.gz"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
             
             if [[ -z "$linux_asset" ]]; then
                 # Pattern 2: linux-x86_64.zip or linux-x86_64.tar.gz
@@ -310,7 +333,6 @@ if [[ "$SKIP_ITM" != "true" ]]; then
                 echo -e "  ${YELLOW}Place the compiled libitm.so in: $ITM_DIR${NC}"
                 exit 1
             fi
-        fi
     fi
     echo ""
 fi
