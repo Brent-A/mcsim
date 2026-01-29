@@ -234,6 +234,7 @@ public:
     virtual int available() = 0;
     virtual int read() = 0;
     virtual int peek() = 0;
+    virtual void flush() {}
     
     size_t readBytes(uint8_t* buffer, size_t length);
     size_t readBytes(char* buffer, size_t length) {
