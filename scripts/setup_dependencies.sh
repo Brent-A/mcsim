@@ -20,6 +20,7 @@
 #     --include-dem           Include DEM data files
 #     --skip-itm              Skip downloading the ITM library
 #     --skip-rerun            Skip downloading the Rerun viewer (optional dependency)
+#     --itm-source URL        Alternative GitHub repo URL for ITM library (e.g., https://github.com/usrflo/itm-linux)
 #     --dem-csv-path PATH     Path to the CSV file describing DEM tiles to download (default: dem_data/data.csv)
 #     --force                 Force re-download of dependencies even if they already exist
 #
@@ -32,6 +33,9 @@
 #
 #     ./setup_dependencies.sh --force
 #         Re-downloads all dependencies even if they exist.
+#
+#     ./setup_dependencies.sh --itm-source https://github.com/usrflo/itm-linux
+#         Uses alternative source for ITM library (for Linux/macOS binaries).
 #
 
 set -e
@@ -50,6 +54,7 @@ SKIP_ITM=false
 SKIP_RERUN=false
 DEM_CSV_PATH=""
 FORCE=false
+ITM_SOURCE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -68,6 +73,10 @@ while [[ $# -gt 0 ]]; do
         --skip-rerun)
             SKIP_RERUN=true
             shift
+            ;;
+        --itm-source)
+            ITM_SOURCE="$2"
+            shift 2
             ;;
         --dem-csv-path)
             DEM_CSV_PATH="$2"
@@ -119,7 +128,7 @@ download_file() {
     fi
 }
 
-# Helper function to extract a zip file
+# Helper function to extract archive files (zip or tar.gz)
 extract_archive() {
     local archive_path="$1"
     local destination_path="$2"
@@ -130,11 +139,25 @@ extract_archive() {
         mkdir -p "$destination_path"
     fi
     
-    if unzip -q -o "$archive_path" -d "$destination_path"; then
-        echo -e "    ${GREEN}Done!${NC}"
-        return 0
+    # Determine archive type by extension
+    if [[ "$archive_path" == *.tar.gz ]] || [[ "$archive_path" == *.tgz ]]; then
+        if tar -xzf "$archive_path" -C "$destination_path"; then
+            echo -e "    ${GREEN}Done!${NC}"
+            return 0
+        else
+            echo -e "    ${RED}Failed to extract tar.gz archive${NC}"
+            return 1
+        fi
+    elif [[ "$archive_path" == *.zip ]]; then
+        if unzip -q -o "$archive_path" -d "$destination_path"; then
+            echo -e "    ${GREEN}Done!${NC}"
+            return 0
+        else
+            echo -e "    ${RED}Failed to extract zip archive${NC}"
+            return 1
+        fi
     else
-        echo -e "    ${RED}Failed to extract archive${NC}"
+        echo -e "    ${RED}Unsupported archive format: $archive_path${NC}"
         return 1
     fi
 }
@@ -168,7 +191,15 @@ if [[ "$SKIP_ITM" != "true" ]]; then
         echo -e "  ${GREEN}ITM library already exists at $ITM_LIB${NC}"
         echo -e "  ${GRAY}Use --force to re-download${NC}"
     else
-        echo -e "  ${GRAY}ITM library source: https://github.com/NTIA/itm${NC}"
+        # Determine the source repository
+        if [[ -n "$ITM_SOURCE" ]]; then
+            echo -e "  ${GRAY}ITM library source: $ITM_SOURCE${NC}"
+            # Extract owner/repo from GitHub URL, removing trailing slashes
+            ITM_REPO=$(echo "$ITM_SOURCE" | sed 's|https://github.com/||' | sed 's|/$||')
+        else
+            echo -e "  ${GRAY}ITM library source: https://github.com/NTIA/itm${NC}"
+            ITM_REPO="NTIA/itm"
+        fi
         
         # Create itm directory
         if [[ ! -d "$ITM_DIR" ]]; then
@@ -176,38 +207,145 @@ if [[ "$SKIP_ITM" != "true" ]]; then
         fi
         
         # Fetch latest release from GitHub
-        ITM_RELEASES_URL="https://api.github.com/repos/NTIA/itm/releases/latest"
+        ITM_RELEASES_URL="https://api.github.com/repos/${ITM_REPO}/releases/latest"
         
         echo -e "  ${YELLOW}Fetching latest ITM release info...${NC}"
+        echo -e "  ${GRAY}API URL: ${ITM_RELEASES_URL}${NC}"
         
         release_info=$(curl -s "$ITM_RELEASES_URL" 2>/dev/null)
         
         if [[ -z "$release_info" ]]; then
-            echo -e "  ${RED}Failed to fetch ITM release info${NC}"
-            echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/NTIA/itm${NC}"
+            echo -e "  ${RED}Failed to fetch ITM release info (empty response)${NC}"
+            echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/${ITM_REPO}${NC}"
             echo -e "  ${YELLOW}Place the compiled libitm.so in: $ITM_DIR${NC}"
-        else
-            # Find the Linux x86_64 asset
-            linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*linux[^"]*x86_64[^"]*\.zip"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+            exit 1
+        fi
+        
+        # Check if the API returned an error message
+        api_error=$(echo "$release_info" | grep -o '"message":"[^"]*"' | head -1 | sed 's/"message":"//;s/"$//')
+        if [[ -n "$api_error" ]]; then
+            echo -e "  ${RED}GitHub API Error: ${api_error}${NC}"
+            echo -e "  ${YELLOW}Full API response (first 500 chars):${NC}"
+            echo -e "  ${GRAY}$(echo "$release_info" | head -c 500)${NC}"
+            echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/${ITM_REPO}${NC}"
+            echo -e "  ${YELLOW}Place the compiled libitm.so in: $ITM_DIR${NC}"
+            exit 1
+        fi
+        
+        # Extract and display release tag
+        # The pattern must account for optional spaces after the colon
+        release_tag=$(echo "$release_info" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
+        
+        # If tag_name is not found, try to extract from html_url as fallback
+        if [[ -z "$release_tag" ]]; then
+            release_tag=$(echo "$release_info" | grep -o '"html_url"[[:space:]]*:[[:space:]]*"[^"]*releases/tag/[^"]*"' | sed 's|.*releases/tag/||;s|"$||' | head -1)
+        fi
+        
+        if [[ -z "$release_tag" ]]; then
+            echo -e "  ${RED}No release tag found in API response${NC}"
+            echo -e "  ${YELLOW}API response (first 1000 chars):${NC}"
+            echo -e "  ${GRAY}$(echo "$release_info" | head -c 1000)${NC}"
+            echo -e "  ${YELLOW}Searching for tag_name in full response...${NC}"
+            if echo "$release_info" | grep -q '"tag_name"'; then
+                echo -e "  ${CYAN}Found tag_name field in response (beyond first 1000 chars)${NC}"
+                echo -e "  ${GRAY}$(echo "$release_info" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"')${NC}"
+            else
+                echo -e "  ${RED}tag_name field not found anywhere in response${NC}"
+            fi
+            echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/${ITM_REPO}${NC}"
+            echo -e "  ${YELLOW}Place the compiled libitm.so in: $ITM_DIR${NC}"
+            exit 1
+        fi
+        
+        echo -e "  ${CYAN}Release tag: ${release_tag}${NC}"
+        
+        # Extract and display all available assets
+        echo -e "  ${CYAN}Available assets:${NC}"
+        echo "$release_info" | grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"name"[[:space:]]*:[[:space:]]*"//;s/"$//' | while read -r asset_name; do
+            echo -e "    - ${GRAY}${asset_name}${NC}"
+        done
+        echo ""
+        
+        # Try multiple patterns to find Linux binary assets
+        # Pattern 1: itm-linux-x86_64.tar.gz (new format)
+        linux_asset=$(echo "$release_info" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*itm-linux-x86_64[^"]*\.tar\.gz"' | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
             
             if [[ -z "$linux_asset" ]]; then
-                # Try alternative patterns
-                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url":"[^"]*linux[^"]*\.zip"' | head -1 | sed 's/"browser_download_url":"//;s/"$//')
+                # Pattern 2: linux-x86_64.zip or linux-x86_64.tar.gz
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*linux-x86_64[^"]*\.\(zip\|tar\.gz\)"' | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
+            fi
+            
+            if [[ -z "$linux_asset" ]]; then
+                # Pattern 3: linux_x86_64.zip or tar.gz
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*linux_x86_64[^"]*\.\(zip\|tar\.gz\)"' | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
+            fi
+            
+            if [[ -z "$linux_asset" ]]; then
+                # Pattern 4: linux.zip, Linux.zip, linux.tar.gz, or Linux.tar.gz
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*[Ll]inux[^"]*\.\(zip\|tar\.gz\)"' | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
+            fi
+            
+            if [[ -z "$linux_asset" ]]; then
+                # Pattern 5: Any file with x86_64 (zip or tar.gz)
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*x86_64[^"]*\.\(zip\|tar\.gz\)"' | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
+            fi
+            
+            if [[ -z "$linux_asset" ]]; then
+                # Pattern 6: Any .so file directly
+                linux_asset=$(echo "$release_info" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*\.so"' | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1)
             fi
             
             if [[ -n "$linux_asset" ]]; then
-                zip_path="$ITM_DIR/itm_temp.zip"
-                if download_file "$linux_asset" "$zip_path" "ITM release"; then
-                    if extract_archive "$zip_path" "$ITM_DIR"; then
-                        rm -f "$zip_path"
+                echo -e "  ${CYAN}Found asset: $linux_asset${NC}"
+                
+                # Check if it's a .so file or an archive file
+                if [[ "$linux_asset" == *.so ]]; then
+                    # Download .so file directly
+                    if download_file "$linux_asset" "$ITM_LIB" "ITM library"; then
+                        echo -e "  ${GREEN}ITM library installed successfully${NC}"
+                    else
+                        echo -e "  ${RED}Failed to download ITM library${NC}"
+                        exit 1
+                    fi
+                else
+                    # Download and extract archive (zip or tar.gz)
+                    # Preserve the file extension for proper extraction
+                    if [[ "$linux_asset" == *.tar.gz ]]; then
+                        archive_path="$ITM_DIR/itm_temp.tar.gz"
+                    elif [[ "$linux_asset" == *.zip ]]; then
+                        archive_path="$ITM_DIR/itm_temp.zip"
+                    else
+                        archive_path="$ITM_DIR/itm_temp_archive"
+                    fi
+                    
+                    if download_file "$linux_asset" "$archive_path" "ITM release"; then
+                        if extract_archive "$archive_path" "$ITM_DIR"; then
+                            rm -f "$archive_path"
+                            
+                            # Verify the library file exists after extraction
+                            if [[ -f "$ITM_LIB" ]]; then
+                                echo -e "  ${GREEN}ITM library installed successfully${NC}"
+                            else
+                                echo -e "  ${RED}ITM library not found after extraction${NC}"
+                                echo -e "  ${YELLOW}Files extracted:${NC}"
+                                ls -la "$ITM_DIR"
+                                exit 1
+                            fi
+                        else
+                            echo -e "  ${RED}Failed to extract ITM archive${NC}"
+                            exit 1
+                        fi
+                    else
+                        echo -e "  ${RED}Failed to download ITM release${NC}"
+                        exit 1
                     fi
                 fi
             else
-                echo -e "  ${YELLOW}No pre-built Linux binary found in latest release.${NC}"
-                echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/NTIA/itm${NC}"
+                echo -e "  ${RED}No pre-built Linux binary found in latest release.${NC}"
+                echo -e "  ${YELLOW}You may need to build ITM manually from https://github.com/${ITM_REPO}${NC}"
                 echo -e "  ${YELLOW}Place the compiled libitm.so in: $ITM_DIR${NC}"
+                exit 1
             fi
-        fi
     fi
     echo ""
 fi
