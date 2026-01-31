@@ -18,7 +18,7 @@ use crate::metric_spec::{
 };
 use metrics::{Counter, Gauge, Histogram, Key, KeyName, Metadata, Recorder, SharedString, Unit};
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -31,14 +31,14 @@ use std::sync::Arc;
 #[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct NodeMetrics {
     /// Counter metrics for this node.
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub counters: HashMap<String, u64>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub counters: BTreeMap<String, u64>,
     /// Gauge metrics for this node.
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub gauges: HashMap<String, f64>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub gauges: BTreeMap<String, f64>,
     /// Histogram metrics for this node.
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub histograms: HashMap<String, HistogramSummary>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub histograms: BTreeMap<String, HistogramSummary>,
 }
 
 /// Collected metric data for export.
@@ -47,14 +47,14 @@ pub struct MetricsSnapshot {
     /// Timestamp when metrics were collected.
     pub timestamp: String,
     /// Counter metrics (name -> value) - aggregated across all nodes.
-    pub counters: HashMap<String, u64>,
+    pub counters: BTreeMap<String, u64>,
     /// Gauge metrics (name -> value) - aggregated across all nodes.
-    pub gauges: HashMap<String, f64>,
+    pub gauges: BTreeMap<String, f64>,
     /// Histogram metrics (name -> summary stats) - aggregated across all nodes.
-    pub histograms: HashMap<String, HistogramSummary>,
+    pub histograms: BTreeMap<String, HistogramSummary>,
     /// Per-node breakdown of metrics.
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub nodes: HashMap<String, NodeMetrics>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub nodes: BTreeMap<String, NodeMetrics>,
 }
 
 /// Summary statistics for a histogram metric.
@@ -598,13 +598,13 @@ impl HistogramState {
 #[derive(Debug, Default)]
 struct RecorderState {
     /// Counters keyed by full key string (metric name + labels).
-    counters: RwLock<HashMap<String, Arc<CounterState>>>,
+    counters: RwLock<BTreeMap<String, Arc<CounterState>>>,
     /// Gauges keyed by full key string (metric name + labels).
-    gauges: RwLock<HashMap<String, Arc<GaugeState>>>,
+    gauges: RwLock<BTreeMap<String, Arc<GaugeState>>>,
     /// Histograms keyed by full key string (metric name + labels).
-    histograms: RwLock<HashMap<String, Arc<HistogramState>>>,
+    histograms: RwLock<BTreeMap<String, Arc<HistogramState>>>,
     /// Mapping from full key to (metric_name, labels) for breakdown.
-    key_metadata: RwLock<HashMap<String, KeyMetadata>>,
+    key_metadata: RwLock<BTreeMap<String, KeyMetadata>>,
     /// Metric specs for label filtering. When set, only labels matching the
     /// breakdown specifications will be stored, reducing memory usage.
     label_specs: RwLock<Vec<MetricSpec>>,
@@ -929,10 +929,10 @@ impl RecorderState {
         let metadata = self.key_metadata.read();
 
         // Build aggregated metrics and per-node breakdown
-        let mut agg_counters: HashMap<String, u64> = HashMap::new();
-        let mut agg_gauges: HashMap<String, f64> = HashMap::new();
-        let mut agg_histograms: HashMap<String, Vec<f64>> = HashMap::new();
-        let mut nodes: HashMap<String, NodeMetrics> = HashMap::new();
+        let mut agg_counters: BTreeMap<String, u64> = BTreeMap::new();
+        let mut agg_gauges: BTreeMap<String, f64> = BTreeMap::new();
+        let mut agg_histograms: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+        let mut nodes: BTreeMap<String, NodeMetrics> = BTreeMap::new();
 
         // Process counters
         for (key_str, counter) in self.counters.read().iter() {
@@ -983,7 +983,7 @@ impl RecorderState {
         }
 
         // Convert aggregated histogram samples to summaries
-        let histograms: HashMap<String, HistogramSummary> = agg_histograms
+        let histograms: BTreeMap<String, HistogramSummary> = agg_histograms
             .into_iter()
             .map(|(name, samples)| {
                 let summary = compute_histogram_summary(&samples);
@@ -1006,9 +1006,9 @@ impl RecorderState {
         let metadata = self.key_metadata.read();
 
         // Collect raw data keyed by (metric_name, labels)
-        let mut counter_data: HashMap<String, Vec<(KeyMetadata, u64)>> = HashMap::new();
-        let mut gauge_data: HashMap<String, Vec<(KeyMetadata, f64)>> = HashMap::new();
-        let mut histogram_data: HashMap<String, Vec<(KeyMetadata, Vec<f64>)>> = HashMap::new();
+        let mut counter_data: BTreeMap<String, Vec<(KeyMetadata, u64)>> = BTreeMap::new();
+        let mut gauge_data: BTreeMap<String, Vec<(KeyMetadata, f64)>> = BTreeMap::new();
+        let mut histogram_data: BTreeMap<String, Vec<(KeyMetadata, Vec<f64>)>> = BTreeMap::new();
 
         // Collect counters
         for (key_str, counter) in self.counters.read().iter() {
@@ -1041,7 +1041,7 @@ impl RecorderState {
         }
 
         // Build result based on specs
-        let mut metrics: HashMap<String, MetricValue> = HashMap::new();
+        let mut metrics: BTreeMap<String, MetricValue> = BTreeMap::new();
 
         // Determine which metrics match which specs
         let all_metric_names: std::collections::HashSet<_> = counter_data
@@ -1171,7 +1171,7 @@ fn apply_counter_breakdowns(
     }
 
     let label = breakdowns[depth];
-    let mut grouped: HashMap<String, Vec<(KeyMetadata, u64)>> = HashMap::new();
+    let mut grouped: BTreeMap<String, Vec<(KeyMetadata, u64)>> = BTreeMap::new();
 
     for (meta, v) in data {
         let keys = meta.breakdown_values(label);
@@ -1215,7 +1215,7 @@ fn apply_gauge_breakdowns(
     }
 
     let label = breakdowns[depth];
-    let mut grouped: HashMap<String, Vec<(KeyMetadata, f64)>> = HashMap::new();
+    let mut grouped: BTreeMap<String, Vec<(KeyMetadata, f64)>> = BTreeMap::new();
 
     for (meta, v) in data {
         let keys = meta.breakdown_values(label);
@@ -1261,7 +1261,7 @@ fn apply_histogram_breakdowns(
     }
 
     let label = breakdowns[depth];
-    let mut grouped: HashMap<String, Vec<(KeyMetadata, Vec<f64>)>> = HashMap::new();
+    let mut grouped: BTreeMap<String, Vec<(KeyMetadata, Vec<f64>)>> = BTreeMap::new();
 
     for (meta, samples) in data {
         let keys = meta.breakdown_values(label);
