@@ -18,7 +18,7 @@
 //! - `<breakdown>` is a label name to group by (node, node_type, group, packet_type)
 //! - `*` as a breakdown means "break down by all available labels in the data"
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Known breakdown labels that can be used for aggregation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -385,7 +385,7 @@ pub struct MetricsExport {
     /// Timestamp when metrics were collected.
     pub timestamp: String,
     /// All metrics with their values and breakdowns.
-    pub metrics: HashMap<String, MetricValue>,
+    pub metrics: BTreeMap<String, MetricValue>,
 }
 
 // ============================================================================
