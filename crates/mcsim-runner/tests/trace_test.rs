@@ -64,8 +64,9 @@ fn run_and_collect_trace(
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let output_path = temp_dir.path().join("trace.json");
 
-    // Build command - run from workspace root
+    // Build command - run from workspace root (two levels up from crate)
     let mut cmd = Command::new(binary);
+    cmd.current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
     cmd.arg("run");
     cmd.arg(topology);
     cmd.arg("--seed");
