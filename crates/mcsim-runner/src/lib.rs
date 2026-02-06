@@ -179,6 +179,12 @@ pub struct TraceEntry {
     /// Received signal strength.
     #[serde(rename = "RSSI")]
     pub rssi: String,
+    /// Raw packet payload (hex-encoded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet_hex: Option<String>,
+    /// Decoded packet data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet: Option<serde_json::Value>,
 }
 
 /// Trace recorder for outputting simulation events.
@@ -1160,6 +1166,27 @@ impl EventLoop {
             sim_secs % 60.0
         );
 
+        // Extract packet data if available
+        let (packet_hex, packet_json) = match &event.payload {
+            EventPayload::TransmitAir(tx) => {
+                // Encode raw payload as hex
+                let hex = hex::encode(&tx.packet.payload);
+                // Try to decode the packet
+                let json = tx.packet.decoded()
+                    .and_then(|p| serde_json::to_value(p).ok());
+                (Some(hex), json)
+            },
+            EventPayload::RadioRxPacket(rx) => {
+                // Encode raw payload as hex
+                let hex = hex::encode(&rx.packet.payload);
+                // Try to decode the packet
+                let json = rx.packet.decoded()
+                    .and_then(|p| serde_json::to_value(p).ok());
+                (Some(hex), json)
+            },
+            _ => (None, None),
+        };
+
         let (entry_type, direction, snr, rssi) = match &event.payload {
             EventPayload::TransmitAir(tx) => (
                 "PACKET".to_string(),
@@ -1202,6 +1229,8 @@ impl EventLoop {
             direction,
             snr,
             rssi,
+            packet_hex,
+            packet: packet_json,
         };
 
         self.trace.record(entry);
