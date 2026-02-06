@@ -48,3 +48,4 @@ memory-stats = "1.2"
 
 [dev-dependencies]
 serial_test = "3.0"
+tempfile = "3.0"

@@ -426,6 +426,10 @@ pub struct RadioRxPacketEvent {
     pub was_collided: bool,
     /// Whether the packet was too weak (SNR below threshold).
     pub was_weak_signal: bool,
+    /// When the packet transmission started.
+    pub start_time: SimTime,
+    /// When the packet transmission ended (reception complete).
+    pub end_time: SimTime,
 }
 
 /// Radio state machine changed - covers all state transitions.

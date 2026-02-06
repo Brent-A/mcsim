@@ -707,9 +707,109 @@ nodes:
 mcsim --model network.yaml \
       --seed 12345 \           # Deterministic seed
       --duration 3600 \        # Run for 1 hour (sim time)
-      --output trace.json \    # Record event trace
+      --output trace.json \    # Record event trace with full packet data
       --verbose                # Print progress
 ```
+
+### Event Trace Output
+
+The `--output` flag records a JSON trace file containing all simulation events. Each trace entry includes:
+
+- **Basic metadata**: origin (node name), origin_id, timestamp, event type
+- **Radio metrics** (for packet events):
+  - TX: `RSSI` (transmit power in dBm)
+  - RX: `SNR` (signal-to-noise ratio), `RSSI` (received signal strength)
+- **Packet identification**:
+  - `payload_hash`: 16-character hex hash identifying unique packet content (stable across routing hops)
+- **Full packet data** (for TX/RX events):
+  - `packet_hex`: Raw packet payload as hex-encoded string
+  - `packet`: Decoded MeshCore packet structure (if decode succeeds)
+- **Packet timing** (for TX and RX events):
+  - `packet_start_time_s`: Transmission start time in seconds
+  - `packet_end_time_s`: Transmission end time in seconds
+- **Reception status** (for RX events only):
+  - `reception_status`: "ok", "collided", or "weak"
+- **Timer events**:
+  - `timer_id`: Timer identifier (no direction, SNR, or RSSI fields)
+
+**Example TX trace entry** (abbreviated for brevity):
+```json
+{
+  "origin": "Alice",
+  "origin_id": "1",
+  "timestamp": "2025-01-01T00:00:00.500Z",
+  "type": "PACKET",
+  "direction": "TX",
+  "RSSI": "20 dBm",
+  "payload_hash": "1A2B3C4D5E6F7890",
+  "packet_hex": "01a4000102030405...",
+  "packet": {
+    "header": {
+      "route_type": "Flood",
+      "payload_type": "Advert",
+      "version": "V1"
+    },
+    "path": [],
+    "payload": {
+      "Advert": {
+        "public_key": [...],
+        "timestamp": 1234567890,
+        "signature": [...],
+        "alias": "Node1"
+      }
+    }
+  },
+  "packet_start_time_s": 0.500,
+  "packet_end_time_s": 0.750
+}
+```
+
+**Example RX trace entry** (abbreviated for brevity):
+```json
+{
+  "origin": "Repeater1",
+  "origin_id": "2",
+  "timestamp": "2025-01-01T00:00:00.750Z",
+  "type": "PACKET",
+  "direction": "RX",
+  "SNR": "15.5 dB",
+  "RSSI": "-85.2 dBm",
+  "payload_hash": "1A2B3C4D5E6F7890",
+  "packet_hex": "01a4000102030405...",
+  "packet": {
+    "header": {
+      "route_type": "Flood",
+      "payload_type": "Advert",
+      "version": "V1"
+    },
+    "path": [],
+    "payload": {
+      "Advert": {
+        "public_key": [...],
+        "timestamp": 1234567890,
+        "signature": [...],
+        "alias": "Node1"
+      }
+    }
+  },
+  "packet_start_time_s": 0.500,
+  "packet_end_time_s": 0.750,
+  "reception_status": "ok"
+}
+```
+
+**Example Timer trace entry**:
+```json
+{
+  "origin": "Alice",
+  "origin_id": "2",
+  "timestamp": "2025-01-01T00:00:02.010Z",
+  "type": "TIMER",
+  "timer_id": 1
+}
+```
+
+Non-packet events (timers, messages) omit the packet-specific fields (direction, SNR, RSSI, payload_hash, etc.).
 
 ## Debugging Tips
 
