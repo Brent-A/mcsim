@@ -707,9 +707,51 @@ nodes:
 mcsim --model network.yaml \
       --seed 12345 \           # Deterministic seed
       --duration 3600 \        # Run for 1 hour (sim time)
-      --output trace.json \    # Record event trace
+      --output trace.json \    # Record event trace with full packet data
       --verbose                # Print progress
 ```
+
+### Event Trace Output
+
+The `--output` flag records a JSON trace file containing all simulation events. Each trace entry includes:
+
+- **Basic metadata**: origin, timestamp, event type, direction
+- **Radio metrics**: SNR, RSSI (for packet events)
+- **Full packet data** (for TX/RX events):
+  - `packet_hex`: Raw packet payload as hex-encoded string
+  - `packet`: Decoded MeshCore packet structure (if decode succeeds)
+
+**Example trace entry with full packet export**:
+```json
+{
+  "origin": "Entity_1",
+  "origin_id": "1",
+  "timestamp": "2025-01-01T00:00:00.500Z",
+  "type": "PACKET",
+  "direction": "TX",
+  "SNR": "N/A",
+  "RSSI": "20 dBm",
+  "packet_hex": "01a4000102030405...",
+  "packet": {
+    "header": {
+      "route_type": "Flood",
+      "payload_type": "Advert",
+      "version": "V1"
+    },
+    "path": [],
+    "payload": {
+      "Advert": {
+        "public_key": [...],
+        "timestamp": 1234567890,
+        "signature": [...],
+        "alias": "Node1"
+      }
+    }
+  }
+}
+```
+
+Non-packet events (timers, messages) omit the `packet_hex` and `packet` fields.
 
 ## Debugging Tips
 

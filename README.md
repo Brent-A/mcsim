@@ -9,6 +9,7 @@ MCSim is a simulation framework for [MeshCore](https://github.com/liamcottle/mes
 - Real-time visualization with [Rerun](https://rerun.io)
 - Configurable network topologies via YAML files
 - Metrics collection and analysis with packet decoding
+- Full packet export to JSON with decoded MeshCore packet structure
 - Deterministic execution
 - Full mesh lockstep timing for accurate collision analysis
 - Realistic radio propagation using the NTIA Irregular Terrain Model (ITM)
