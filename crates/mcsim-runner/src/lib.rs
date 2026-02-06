@@ -1154,6 +1154,16 @@ impl EventLoop {
         }
     }
 
+    /// Extract packet data from a LoraPacket for trace output.
+    fn extract_packet_data(packet: &mcsim_common::LoraPacket) -> (Option<String>, Option<serde_json::Value>) {
+        // Encode raw payload as hex
+        let hex = hex::encode(&packet.payload);
+        // Try to decode the packet
+        let json = packet.decoded()
+            .and_then(|p| serde_json::to_value(p).ok());
+        (Some(hex), json)
+    }
+
     /// Record a trace entry for an event.
     fn record_trace(&mut self, event: &Event) {
         // Convert simulation time to ISO 8601 timestamp
@@ -1168,22 +1178,8 @@ impl EventLoop {
 
         // Extract packet data if available
         let (packet_hex, packet_json) = match &event.payload {
-            EventPayload::TransmitAir(tx) => {
-                // Encode raw payload as hex
-                let hex = hex::encode(&tx.packet.payload);
-                // Try to decode the packet
-                let json = tx.packet.decoded()
-                    .and_then(|p| serde_json::to_value(p).ok());
-                (Some(hex), json)
-            },
-            EventPayload::RadioRxPacket(rx) => {
-                // Encode raw payload as hex
-                let hex = hex::encode(&rx.packet.payload);
-                // Try to decode the packet
-                let json = rx.packet.decoded()
-                    .and_then(|p| serde_json::to_value(p).ok());
-                (Some(hex), json)
-            },
+            EventPayload::TransmitAir(tx) => Self::extract_packet_data(&tx.packet),
+            EventPayload::RadioRxPacket(rx) => Self::extract_packet_data(&rx.packet),
             _ => (None, None),
         };
 
