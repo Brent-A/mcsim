@@ -720,7 +720,7 @@ The `--output` flag records a JSON trace file containing all simulation events. 
 - **Full packet data** (for TX/RX events):
   - `packet_hex`: Raw packet payload as hex-encoded string
   - `packet`: Decoded MeshCore packet structure (if decode succeeds)
-- **Packet timing** (for TX events only):
+- **Packet timing** (for TX and RX events):
   - `packet_start_time_s`: Transmission start time in seconds
   - `packet_end_time_s`: Transmission end time in seconds
 - **Reception status** (for RX events only):
@@ -785,6 +785,8 @@ The `--output` flag records a JSON trace file containing all simulation events. 
       }
     }
   },
+  "packet_start_time_s": 0.500,
+  "packet_end_time_s": 0.750,
   "reception_status": "ok"
 }
 ```

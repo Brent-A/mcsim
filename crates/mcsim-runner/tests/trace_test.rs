@@ -295,22 +295,36 @@ fn test_trace_output_tx_packet_timing() {
         );
     }
 
-    // Verify RX events do NOT have packet timing information
+    // Verify RX events also have packet timing information
     let rx_events: Vec<_> = trace
         .iter()
         .filter(|e| e.entry_type == "PACKET" && e.direction == "RX")
         .collect();
 
+    assert!(
+        !rx_events.is_empty(),
+        "Expected at least one RX PACKET event in trace"
+    );
+
     for event in &rx_events {
         assert!(
-            event.packet_start_time_s.is_none(),
-            "RX PACKET event should not have packet_start_time_s: {:?}",
+            event.packet_start_time_s.is_some(),
+            "RX PACKET event should have packet_start_time_s: {:?}",
             event
         );
         assert!(
-            event.packet_end_time_s.is_none(),
-            "RX PACKET event should not have packet_end_time_s: {:?}",
+            event.packet_end_time_s.is_some(),
+            "RX PACKET event should have packet_end_time_s: {:?}",
             event
+        );
+
+        // Verify end time is after start time
+        let start = event.packet_start_time_s.unwrap();
+        let end = event.packet_end_time_s.unwrap();
+        assert!(
+            end > start,
+            "packet_end_time_s ({}) should be after packet_start_time_s ({})",
+            end, start
         );
     }
 }

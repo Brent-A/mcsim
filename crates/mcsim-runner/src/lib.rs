@@ -1214,11 +1214,15 @@ impl EventLoop {
             _ => None,
         };
 
-        // Extract packet timing information for TX events
+        // Extract packet timing information for TX and RX events
         let (packet_start_time_s, packet_end_time_s) = match &event.payload {
             EventPayload::TransmitAir(tx) => {
                 // Start time is the event time, end time is from the event
                 (Some(event.time.as_secs_f64()), Some(tx.end_time.as_secs_f64()))
+            },
+            EventPayload::RadioRxPacket(rx) => {
+                // Start and end times are from the reception event
+                (Some(rx.start_time.as_secs_f64()), Some(rx.end_time.as_secs_f64()))
             },
             _ => (None, None),
         };

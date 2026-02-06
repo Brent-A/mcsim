@@ -769,6 +769,8 @@ impl Radio {
                     rssi_dbm: reception.rssi_dbm,
                     was_collided: !survived,
                     was_weak_signal: !snr_ok,
+                    start_time: reception.start_time,
+                    end_time: reception.end_time,
                 }),
             );
 
