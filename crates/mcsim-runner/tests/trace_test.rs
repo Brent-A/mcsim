@@ -33,6 +33,10 @@ struct TraceEntry {
     packet: Option<serde_json::Value>,
     #[serde(default)]
     reception_status: Option<String>,
+    #[serde(default)]
+    packet_start_time_s: Option<f64>,
+    #[serde(default)]
+    packet_end_time_s: Option<f64>,
 }
 
 // ============================================================================
@@ -243,6 +247,69 @@ fn test_trace_output_non_packet_events() {
         assert!(
             event.reception_status.is_none(),
             "Non-packet event should not have reception_status: {:?}",
+            event
+        );
+    }
+}
+
+#[test]
+fn test_trace_output_tx_packet_timing() {
+    // Run a short simulation
+    let trace = run_and_collect_trace(
+        "crates/mcsim-runner/tests/two_companions.yaml",
+        42,
+        "10s",
+    );
+
+    // Find TX packet events
+    let tx_events: Vec<_> = trace
+        .iter()
+        .filter(|e| e.entry_type == "PACKET" && e.direction == "TX")
+        .collect();
+
+    assert!(
+        !tx_events.is_empty(),
+        "Expected at least one TX PACKET event in trace"
+    );
+
+    // Verify TX events have packet timing information
+    for event in &tx_events {
+        assert!(
+            event.packet_start_time_s.is_some(),
+            "TX PACKET event should have packet_start_time_s: {:?}",
+            event
+        );
+        assert!(
+            event.packet_end_time_s.is_some(),
+            "TX PACKET event should have packet_end_time_s: {:?}",
+            event
+        );
+
+        // Verify end time is after start time
+        let start = event.packet_start_time_s.unwrap();
+        let end = event.packet_end_time_s.unwrap();
+        assert!(
+            end > start,
+            "packet_end_time_s ({}) should be after packet_start_time_s ({})",
+            end, start
+        );
+    }
+
+    // Verify RX events do NOT have packet timing information
+    let rx_events: Vec<_> = trace
+        .iter()
+        .filter(|e| e.entry_type == "PACKET" && e.direction == "RX")
+        .collect();
+
+    for event in &rx_events {
+        assert!(
+            event.packet_start_time_s.is_none(),
+            "RX PACKET event should not have packet_start_time_s: {:?}",
+            event
+        );
+        assert!(
+            event.packet_end_time_s.is_none(),
+            "RX PACKET event should not have packet_end_time_s: {:?}",
             event
         );
     }

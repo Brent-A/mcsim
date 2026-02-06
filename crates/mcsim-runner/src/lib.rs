@@ -188,6 +188,12 @@ pub struct TraceEntry {
     /// Reception status: "ok", "collided", or "weak".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reception_status: Option<String>,
+    /// Packet transmission start time in seconds (for TX events).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet_start_time_s: Option<f64>,
+    /// Packet transmission end time in seconds (for TX events).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet_end_time_s: Option<f64>,
 }
 
 /// Trace recorder for outputting simulation events.
@@ -1208,6 +1214,15 @@ impl EventLoop {
             _ => None,
         };
 
+        // Extract packet timing information for TX events
+        let (packet_start_time_s, packet_end_time_s) = match &event.payload {
+            EventPayload::TransmitAir(tx) => {
+                // Start time is the event time, end time is from the event
+                (Some(event.time.as_secs_f64()), Some(tx.end_time.as_secs_f64()))
+            },
+            _ => (None, None),
+        };
+
         let (entry_type, direction, snr, rssi) = match &event.payload {
             EventPayload::TransmitAir(tx) => (
                 "PACKET".to_string(),
@@ -1253,6 +1268,8 @@ impl EventLoop {
             packet_hex,
             packet: packet_json,
             reception_status,
+            packet_start_time_s,
+            packet_end_time_s,
         };
 
         self.trace.record(entry);

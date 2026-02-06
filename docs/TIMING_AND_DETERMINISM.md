@@ -720,15 +720,50 @@ The `--output` flag records a JSON trace file containing all simulation events. 
 - **Full packet data** (for TX/RX events):
   - `packet_hex`: Raw packet payload as hex-encoded string
   - `packet`: Decoded MeshCore packet structure (if decode succeeds)
+- **Packet timing** (for TX events only):
+  - `packet_start_time_s`: Transmission start time in seconds
+  - `packet_end_time_s`: Transmission end time in seconds
 - **Reception status** (for RX events only):
   - `reception_status`: "ok", "collided", or "weak"
 
-**Example trace entry with full packet export** (abbreviated for brevity):
+**Example TX trace entry** (abbreviated for brevity):
 ```json
 {
   "origin": "Entity_1",
   "origin_id": "1",
   "timestamp": "2025-01-01T00:00:00.500Z",
+  "type": "PACKET",
+  "direction": "TX",
+  "SNR": "N/A",
+  "RSSI": "20 dBm",
+  "packet_hex": "01a4000102030405...",
+  "packet": {
+    "header": {
+      "route_type": "Flood",
+      "payload_type": "Advert",
+      "version": "V1"
+    },
+    "path": [],
+    "payload": {
+      "Advert": {
+        "public_key": [...],
+        "timestamp": 1234567890,
+        "signature": [...],
+        "alias": "Node1"
+      }
+    }
+  },
+  "packet_start_time_s": 0.500,
+  "packet_end_time_s": 0.750
+}
+```
+
+**Example RX trace entry** (abbreviated for brevity):
+```json
+{
+  "origin": "Entity_2",
+  "origin_id": "2",
+  "timestamp": "2025-01-01T00:00:00.750Z",
   "type": "PACKET",
   "direction": "RX",
   "SNR": "15.5 dB",
@@ -754,7 +789,7 @@ The `--output` flag records a JSON trace file containing all simulation events. 
 }
 ```
 
-Non-packet events (timers, messages) omit the `packet_hex`, `packet`, and `reception_status` fields.
+Non-packet events (timers, messages) omit the packet-specific fields.
 
 ## Debugging Tips
 
