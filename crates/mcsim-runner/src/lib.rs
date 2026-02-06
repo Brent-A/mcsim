@@ -185,6 +185,9 @@ pub struct TraceEntry {
     /// Decoded packet data.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub packet: Option<serde_json::Value>,
+    /// Reception status: "ok", "collided", or "weak".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reception_status: Option<String>,
 }
 
 /// Trace recorder for outputting simulation events.
@@ -1191,6 +1194,20 @@ impl EventLoop {
             _ => (None, None),
         };
 
+        // Determine reception status for RX packets
+        let reception_status = match &event.payload {
+            EventPayload::RadioRxPacket(rx) => {
+                if rx.was_collided {
+                    Some("collided".to_string())
+                } else if rx.was_weak_signal {
+                    Some("weak".to_string())
+                } else {
+                    Some("ok".to_string())
+                }
+            },
+            _ => None,
+        };
+
         let (entry_type, direction, snr, rssi) = match &event.payload {
             EventPayload::TransmitAir(tx) => (
                 "PACKET".to_string(),
@@ -1235,6 +1252,7 @@ impl EventLoop {
             rssi,
             packet_hex,
             packet: packet_json,
+            reception_status,
         };
 
         self.trace.record(entry);

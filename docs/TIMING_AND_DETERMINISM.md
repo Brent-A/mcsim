@@ -720,6 +720,8 @@ The `--output` flag records a JSON trace file containing all simulation events. 
 - **Full packet data** (for TX/RX events):
   - `packet_hex`: Raw packet payload as hex-encoded string
   - `packet`: Decoded MeshCore packet structure (if decode succeeds)
+- **Reception status** (for RX events only):
+  - `reception_status`: "ok", "collided", or "weak"
 
 **Example trace entry with full packet export** (abbreviated for brevity):
 ```json
@@ -728,9 +730,9 @@ The `--output` flag records a JSON trace file containing all simulation events. 
   "origin_id": "1",
   "timestamp": "2025-01-01T00:00:00.500Z",
   "type": "PACKET",
-  "direction": "TX",
-  "SNR": "N/A",
-  "RSSI": "20 dBm",
+  "direction": "RX",
+  "SNR": "15.5 dB",
+  "RSSI": "-85.2 dBm",
   "packet_hex": "01a4000102030405...",
   "packet": {
     "header": {
@@ -747,11 +749,12 @@ The `--output` flag records a JSON trace file containing all simulation events. 
         "alias": "Node1"
       }
     }
-  }
+  },
+  "reception_status": "ok"
 }
 ```
 
-Non-packet events (timers, messages) omit the `packet_hex` and `packet` fields.
+Non-packet events (timers, messages) omit the `packet_hex`, `packet`, and `reception_status` fields.
 
 ## Debugging Tips
 
