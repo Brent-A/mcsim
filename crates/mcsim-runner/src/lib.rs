@@ -1155,6 +1155,14 @@ impl EventLoop {
     }
 
     /// Extract packet data from a LoraPacket for trace output.
+    ///
+    /// # Arguments
+    /// * `packet` - The LoRa packet to extract data from
+    ///
+    /// # Returns
+    /// A tuple containing:
+    /// * `Option<String>` - Hex-encoded raw packet payload (always Some for valid packets)
+    /// * `Option<serde_json::Value>` - Decoded MeshCore packet as JSON (Some if decode succeeds)
     fn extract_packet_data(packet: &mcsim_common::LoraPacket) -> (Option<String>, Option<serde_json::Value>) {
         // Encode raw payload as hex
         let hex = hex::encode(&packet.payload);

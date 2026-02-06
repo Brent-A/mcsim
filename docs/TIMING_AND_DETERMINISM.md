@@ -721,7 +721,7 @@ The `--output` flag records a JSON trace file containing all simulation events. 
   - `packet_hex`: Raw packet payload as hex-encoded string
   - `packet`: Decoded MeshCore packet structure (if decode succeeds)
 
-**Example trace entry with full packet export**:
+**Example trace entry with full packet export** (abbreviated for brevity):
 ```json
 {
   "origin": "Entity_1",
