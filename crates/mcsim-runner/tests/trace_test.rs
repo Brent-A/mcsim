@@ -4,7 +4,6 @@
 //! captures packet transmission and reception events with full packet data.
 
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
 
