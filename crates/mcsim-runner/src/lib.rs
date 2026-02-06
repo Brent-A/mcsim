@@ -188,10 +188,10 @@ pub struct TraceEntry {
     /// Reception status: "ok", "collided", or "weak".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reception_status: Option<String>,
-    /// Packet transmission start time in seconds (for TX events).
+    /// Packet start time in seconds (for TX and RX events).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub packet_start_time_s: Option<f64>,
-    /// Packet transmission end time in seconds (for TX events).
+    /// Packet end time in seconds (for TX and RX events).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub packet_end_time_s: Option<f64>,
 }
