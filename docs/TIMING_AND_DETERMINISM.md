@@ -715,8 +715,12 @@ mcsim --model network.yaml \
 
 The `--output` flag records a JSON trace file containing all simulation events. Each trace entry includes:
 
-- **Basic metadata**: origin, timestamp, event type, direction
-- **Radio metrics**: SNR, RSSI (for packet events)
+- **Basic metadata**: origin (node name), origin_id, timestamp, event type
+- **Radio metrics** (for packet events):
+  - TX: `RSSI` (transmit power in dBm)
+  - RX: `SNR` (signal-to-noise ratio), `RSSI` (received signal strength)
+- **Packet identification**:
+  - `payload_hash`: 16-character hex hash identifying unique packet content (stable across routing hops)
 - **Full packet data** (for TX/RX events):
   - `packet_hex`: Raw packet payload as hex-encoded string
   - `packet`: Decoded MeshCore packet structure (if decode succeeds)
@@ -725,17 +729,19 @@ The `--output` flag records a JSON trace file containing all simulation events. 
   - `packet_end_time_s`: Transmission end time in seconds
 - **Reception status** (for RX events only):
   - `reception_status`: "ok", "collided", or "weak"
+- **Timer events**:
+  - `timer_id`: Timer identifier (no direction, SNR, or RSSI fields)
 
 **Example TX trace entry** (abbreviated for brevity):
 ```json
 {
-  "origin": "Entity_1",
+  "origin": "Alice",
   "origin_id": "1",
   "timestamp": "2025-01-01T00:00:00.500Z",
   "type": "PACKET",
   "direction": "TX",
-  "SNR": "N/A",
   "RSSI": "20 dBm",
+  "payload_hash": "1A2B3C4D5E6F7890",
   "packet_hex": "01a4000102030405...",
   "packet": {
     "header": {
@@ -761,13 +767,14 @@ The `--output` flag records a JSON trace file containing all simulation events. 
 **Example RX trace entry** (abbreviated for brevity):
 ```json
 {
-  "origin": "Entity_2",
+  "origin": "Repeater1",
   "origin_id": "2",
   "timestamp": "2025-01-01T00:00:00.750Z",
   "type": "PACKET",
   "direction": "RX",
   "SNR": "15.5 dB",
   "RSSI": "-85.2 dBm",
+  "payload_hash": "1A2B3C4D5E6F7890",
   "packet_hex": "01a4000102030405...",
   "packet": {
     "header": {
@@ -791,7 +798,18 @@ The `--output` flag records a JSON trace file containing all simulation events. 
 }
 ```
 
-Non-packet events (timers, messages) omit the packet-specific fields.
+**Example Timer trace entry**:
+```json
+{
+  "origin": "Alice",
+  "origin_id": "2",
+  "timestamp": "2025-01-01T00:00:02.010Z",
+  "type": "TIMER",
+  "timer_id": 1
+}
+```
+
+Non-packet events (timers, messages) omit the packet-specific fields (direction, SNR, RSSI, payload_hash, etc.).
 
 ## Debugging Tips
 

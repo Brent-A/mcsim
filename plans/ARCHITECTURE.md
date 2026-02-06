@@ -808,31 +808,41 @@ pub struct SimulationStats {
     pub wall_time: Duration,
 }
 
-// Trace output (MeshCore analyzer format)
+// Trace output (structured by event type)
 pub struct TraceRecorder {
     output: Option<Box<dyn Write>>,
-    node_names: HashMap<NodeId, String>,
+    entries: Vec<TraceEntry>,
 }
 
+/// Trace entry with event-specific payload
 #[derive(Serialize)]
 pub struct TraceEntry {
-    pub origin: String,
-    pub origin_id: String,
-    pub timestamp: String,  // ISO 8601
-    #[serde(rename = "type")]
-    pub entry_type: String,
-    pub direction: String,
-    #[serde(rename = "SNR")]
-    pub snr: String,
-    #[serde(rename = "RSSI")]
-    pub rssi: String,
+    pub origin: String,      // Node name (e.g., "Alice")
+    pub origin_id: String,   // Entity ID
+    pub timestamp: String,   // ISO 8601
     #[serde(flatten)]
-    pub extra: HashMap<String, serde_json::Value>,
+    pub payload: TracePayload,
+}
+
+/// Event-specific payloads (only includes relevant fields)
+#[derive(Serialize)]
+#[serde(tag = "type")]
+pub enum TracePayload {
+    #[serde(rename = "PACKET")]
+    TxPacket { direction: String, rssi: String, payload_hash: String, packet_hex: String, ... },
+    #[serde(rename = "PACKET")]
+    RxPacket { direction: String, snr: String, rssi: String, payload_hash: String, reception_status: String, ... },
+    #[serde(rename = "TIMER")]
+    Timer { timer_id: u64 },
+    #[serde(rename = "MESSAGE")]
+    MessageSend { direction: String, destination: String },
+    #[serde(rename = "MESSAGE")]
+    MessageReceived { direction: String },
 }
 
 impl TraceRecorder {
-    pub fn record_packet(&mut self, event: &PacketEvent, time: SimTime);
-    pub fn record_message(&mut self, event: &MessageEvent, time: SimTime);
+    pub fn record(&mut self, entry: TraceEntry);
+    pub fn flush(&mut self) -> Result<(), RunnerError>;
 }
 ```
 

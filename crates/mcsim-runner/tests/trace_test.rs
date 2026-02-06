@@ -14,28 +14,51 @@ use serde::Deserialize;
 // ============================================================================
 
 /// A trace entry from the output file.
+/// 
+/// Due to the flattened tagged enum structure, we deserialize into a more
+/// permissive structure where optional fields may or may not be present
+/// depending on the event type.
 #[derive(Debug, Deserialize, Clone)]
 struct TraceEntry {
     origin: String,
     origin_id: String,
     timestamp: String,
+    /// Event type: "PACKET", "TIMER", "MESSAGE"
     #[serde(rename = "type")]
     entry_type: String,
-    direction: String,
-    #[serde(rename = "SNR")]
-    snr: String,
-    #[serde(rename = "RSSI")]
-    rssi: String,
+    /// Direction (TX/RX) - present on PACKET and MESSAGE events
+    #[serde(default)]
+    direction: Option<String>,
+    /// Signal-to-noise ratio - present on RX PACKET events
+    #[serde(rename = "SNR", default)]
+    snr: Option<String>,
+    /// Signal strength or TX power - present on PACKET events
+    #[serde(rename = "RSSI", default)]
+    rssi: Option<String>,
+    /// Payload hash (16-char hex) - present on PACKET events
+    #[serde(default)]
+    payload_hash: Option<String>,
+    /// Timer ID - present on TIMER events
+    #[serde(default)]
+    timer_id: Option<u64>,
+    /// Raw packet payload (hex-encoded) - present on PACKET events
     #[serde(default)]
     packet_hex: Option<String>,
+    /// Decoded packet data - present on PACKET events
     #[serde(default)]
     packet: Option<serde_json::Value>,
+    /// Reception status - present on RX PACKET events
     #[serde(default)]
     reception_status: Option<String>,
+    /// Packet start time in seconds - present on PACKET events
     #[serde(default)]
     packet_start_time_s: Option<f64>,
+    /// Packet end time in seconds - present on PACKET events
     #[serde(default)]
     packet_end_time_s: Option<f64>,
+    /// Message destination - present on MESSAGE TX events
+    #[serde(default)]
+    destination: Option<String>,
 }
 
 // ============================================================================
@@ -132,6 +155,21 @@ fn test_trace_output_contains_packet_data() {
             event
         );
 
+        // All packet events should have payload_hash
+        assert!(
+            event.payload_hash.is_some(),
+            "PACKET event missing payload_hash field: {:?}",
+            event
+        );
+
+        // Verify payload_hash is valid (16 hex characters or "unknown")
+        let hash = event.payload_hash.as_ref().unwrap();
+        assert!(
+            hash == "unknown" || (hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit())),
+            "payload_hash should be 16 hex chars or 'unknown', got: {}",
+            hash
+        );
+
         // Verify hex string is valid (even length, hex characters)
         let hex = event.packet_hex.as_ref().unwrap();
         assert!(
@@ -162,7 +200,7 @@ fn test_trace_output_contains_reception_status() {
     // Find RX packet events
     let rx_events: Vec<_> = trace
         .iter()
-        .filter(|e| e.entry_type == "PACKET" && e.direction == "RX")
+        .filter(|e| e.entry_type == "PACKET" && e.direction.as_deref() == Some("RX"))
         .collect();
 
     assert!(
@@ -199,7 +237,7 @@ fn test_trace_output_tx_events_have_no_reception_status() {
     // Find TX packet events
     let tx_events: Vec<_> = trace
         .iter()
-        .filter(|e| e.entry_type == "PACKET" && e.direction == "TX")
+        .filter(|e| e.entry_type == "PACKET" && e.direction.as_deref() == Some("TX"))
         .collect();
 
     assert!(
@@ -253,6 +291,83 @@ fn test_trace_output_non_packet_events() {
 }
 
 #[test]
+fn test_trace_output_timer_events() {
+    // Run a short simulation
+    let trace = run_and_collect_trace(
+        "crates/mcsim-runner/tests/two_companions.yaml",
+        42,
+        "10s",
+    );
+
+    // Find TIMER events
+    let timer_events: Vec<_> = trace
+        .iter()
+        .filter(|e| e.entry_type == "TIMER")
+        .collect();
+
+    assert!(
+        !timer_events.is_empty(),
+        "Expected at least one TIMER event in trace"
+    );
+
+    // Verify TIMER events have timer_id field
+    for event in &timer_events {
+        assert!(
+            event.timer_id.is_some(),
+            "TIMER event missing timer_id field: {:?}",
+            event
+        );
+        
+        // TIMER events should not have direction, SNR, or RSSI
+        assert!(
+            event.direction.is_none(),
+            "TIMER event should not have direction: {:?}",
+            event
+        );
+        assert!(
+            event.snr.is_none(),
+            "TIMER event should not have SNR: {:?}",
+            event
+        );
+        assert!(
+            event.rssi.is_none(),
+            "TIMER event should not have RSSI: {:?}",
+            event
+        );
+    }
+}
+
+#[test]
+fn test_trace_output_has_node_names() {
+    // Run a short simulation
+    let trace = run_and_collect_trace(
+        "crates/mcsim-runner/tests/two_companions.yaml",
+        42,
+        "10s",
+    );
+
+    // Verify we got some trace entries
+    assert!(!trace.is_empty(), "Expected trace entries but got none");
+
+    // Verify that origin contains node names, not Entity_N format
+    for event in &trace {
+        assert!(
+            !event.origin.starts_with("Entity_"),
+            "Origin should be node name, not Entity_N format: {}",
+            event.origin
+        );
+    }
+    
+    // Verify expected node names are present (the two_companions topology uses "Sender" and "Receiver")
+    let origins: std::collections::HashSet<_> = trace.iter().map(|e| e.origin.as_str()).collect();
+    assert!(
+        origins.contains("Sender") || origins.contains("Receiver"),
+        "Expected to find Sender or Receiver in trace origins: {:?}",
+        origins
+    );
+}
+
+#[test]
 fn test_trace_output_tx_packet_timing() {
     // Run a short simulation
     let trace = run_and_collect_trace(
@@ -264,7 +379,7 @@ fn test_trace_output_tx_packet_timing() {
     // Find TX packet events
     let tx_events: Vec<_> = trace
         .iter()
-        .filter(|e| e.entry_type == "PACKET" && e.direction == "TX")
+        .filter(|e| e.entry_type == "PACKET" && e.direction.as_deref() == Some("TX"))
         .collect();
 
     assert!(
@@ -298,7 +413,7 @@ fn test_trace_output_tx_packet_timing() {
     // Verify RX events also have packet timing information
     let rx_events: Vec<_> = trace
         .iter()
-        .filter(|e| e.entry_type == "PACKET" && e.direction == "RX")
+        .filter(|e| e.entry_type == "PACKET" && e.direction.as_deref() == Some("RX"))
         .collect();
 
     assert!(

@@ -159,41 +159,109 @@ pub struct ProgressInfo {
 // Trace Recording
 // ============================================================================
 
+/// Payload for a transmitted packet.
+#[derive(Debug, Clone, Serialize)]
+pub struct TxPacketPayload {
+    /// Direction is always "TX" for transmitted packets.
+    pub direction: String,
+    /// Transmit power in dBm.
+    #[serde(rename = "RSSI")]
+    pub rssi: String,
+    /// Payload hash (16-char hex identifying unique packet content).
+    pub payload_hash: String,
+    /// Raw packet payload (hex-encoded).
+    pub packet_hex: String,
+    /// Decoded packet data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet: Option<serde_json::Value>,
+    /// Packet start time in seconds.
+    pub packet_start_time_s: f64,
+    /// Packet end time in seconds.
+    pub packet_end_time_s: f64,
+}
+
+/// Payload for a received packet.
+#[derive(Debug, Clone, Serialize)]
+pub struct RxPacketPayload {
+    /// Direction is always "RX" for received packets.
+    pub direction: String,
+    /// Signal-to-noise ratio in dB.
+    #[serde(rename = "SNR")]
+    pub snr: String,
+    /// Received signal strength in dBm.
+    #[serde(rename = "RSSI")]
+    pub rssi: String,
+    /// Payload hash (16-char hex identifying unique packet content).
+    pub payload_hash: String,
+    /// Raw packet payload (hex-encoded).
+    pub packet_hex: String,
+    /// Decoded packet data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet: Option<serde_json::Value>,
+    /// Reception status: "ok", "collided", or "weak".
+    pub reception_status: String,
+    /// Packet start time in seconds.
+    pub packet_start_time_s: f64,
+    /// Packet end time in seconds.
+    pub packet_end_time_s: f64,
+}
+
+/// Payload for a timer event.
+#[derive(Debug, Clone, Serialize)]
+pub struct TimerPayload {
+    /// Timer ID that fired.
+    pub timer_id: u64,
+}
+
+/// Payload for a message send event.
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageSendPayload {
+    /// Direction is always "TX" for sent messages.
+    pub direction: String,
+    /// Destination address.
+    pub destination: String,
+}
+
+/// Payload for a message received event.
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageReceivedPayload {
+    /// Direction is always "RX" for received messages.
+    pub direction: String,
+}
+
+/// Payload types for different trace events.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+pub enum TracePayload {
+    /// Transmitted packet.
+    #[serde(rename = "PACKET")]
+    TxPacket(TxPacketPayload),
+    /// Received packet.
+    #[serde(rename = "PACKET")]
+    RxPacket(RxPacketPayload),
+    /// Timer fired.
+    #[serde(rename = "TIMER")]
+    Timer(TimerPayload),
+    /// Message sent.
+    #[serde(rename = "MESSAGE")]
+    MessageSend(MessageSendPayload),
+    /// Message received.
+    #[serde(rename = "MESSAGE")]
+    MessageReceived(MessageReceivedPayload),
+}
+
 /// A trace entry for output.
 #[derive(Debug, Clone, Serialize)]
 pub struct TraceEntry {
     /// Origin node name.
     pub origin: String,
-    /// Origin node ID.
+    /// Origin node ID (entity ID).
     pub origin_id: String,
     /// Timestamp (ISO 8601).
     pub timestamp: String,
-    /// Event type.
-    #[serde(rename = "type")]
-    pub entry_type: String,
-    /// Direction (TX/RX).
-    pub direction: String,
-    /// Signal-to-noise ratio.
-    #[serde(rename = "SNR")]
-    pub snr: String,
-    /// Received signal strength.
-    #[serde(rename = "RSSI")]
-    pub rssi: String,
-    /// Raw packet payload (hex-encoded).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub packet_hex: Option<String>,
-    /// Decoded packet data.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub packet: Option<serde_json::Value>,
-    /// Reception status: "ok", "collided", or "weak".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reception_status: Option<String>,
-    /// Packet start time in seconds (for TX and RX events).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub packet_start_time_s: Option<f64>,
-    /// Packet end time in seconds (for TX and RX events).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub packet_end_time_s: Option<f64>,
+    /// Event-specific payload (flattened into this object).
+    #[serde(flatten)]
+    pub payload: TracePayload,
 }
 
 /// Trace recorder for outputting simulation events.
@@ -299,10 +367,17 @@ impl EventLoop {
             node_stats.insert(node_info.radio_entity_id, NodeStats::default());
             firmware_to_radio.insert(node_info.firmware_entity_id, node_info.radio_entity_id);
             radio_to_name.insert(node_info.radio_entity_id, node_info.name.clone());
-            // Map both firmware and radio entity IDs to labels for metrics
+            // Map firmware, radio, and agent entity IDs to labels for metrics and tracing
             let labels = (node_info.name.clone(), node_info.node_type.clone());
             entity_to_labels.insert(node_info.firmware_entity_id, labels.clone());
-            entity_to_labels.insert(node_info.radio_entity_id, labels);
+            entity_to_labels.insert(node_info.radio_entity_id, labels.clone());
+            // Also map agent and CLI agent entity IDs if present
+            if let Some(agent_id) = node_info.agent_entity_id {
+                entity_to_labels.insert(agent_id, labels.clone());
+            }
+            if let Some(cli_agent_id) = node_info.cli_agent_entity_id {
+                entity_to_labels.insert(cli_agent_id, labels.clone());
+            }
             firmware_entity_ids.insert(node_info.firmware_entity_id);
         }
 
@@ -1163,24 +1238,6 @@ impl EventLoop {
         }
     }
 
-    /// Extract packet data from a LoraPacket for trace output.
-    ///
-    /// # Arguments
-    /// * `packet` - The LoRa packet to extract data from
-    ///
-    /// # Returns
-    /// A tuple containing:
-    /// * `Option<String>` - Hex-encoded raw packet payload (always Some for valid packets)
-    /// * `Option<serde_json::Value>` - Decoded MeshCore packet as JSON (Some if decode succeeds)
-    fn extract_packet_data(packet: &mcsim_common::LoraPacket) -> (Option<String>, Option<serde_json::Value>) {
-        // Encode raw payload as hex
-        let hex = hex::encode(&packet.payload);
-        // Try to decode the packet
-        let json = packet.decoded()
-            .and_then(|p| serde_json::to_value(p).ok());
-        (Some(hex), json)
-    }
-
     /// Record a trace entry for an event.
     fn record_trace(&mut self, event: &Event) {
         // Convert simulation time to ISO 8601 timestamp
@@ -1193,87 +1250,77 @@ impl EventLoop {
             sim_secs % 60.0
         );
 
-        // Extract packet data if available
-        let (packet_hex, packet_json) = match &event.payload {
-            EventPayload::TransmitAir(tx) => Self::extract_packet_data(&tx.packet),
-            EventPayload::RadioRxPacket(rx) => Self::extract_packet_data(&rx.packet),
-            _ => (None, None),
-        };
+        // Look up node name from entity ID
+        let origin = self.entity_to_labels
+            .get(&event.source.0)
+            .map(|(name, _)| name.clone())
+            .unwrap_or_else(|| format!("Entity_{}", event.source.0));
 
-        // Determine reception status for RX packets
-        let reception_status = match &event.payload {
-            EventPayload::RadioRxPacket(rx) => {
-                if rx.was_collided {
-                    Some("collided".to_string())
-                } else if rx.was_weak_signal {
-                    Some("weak".to_string())
-                } else {
-                    Some("ok".to_string())
-                }
-            },
-            _ => None,
-        };
-
-        // Extract packet timing information for TX and RX events
-        let (packet_start_time_s, packet_end_time_s) = match &event.payload {
+        // Build the trace payload based on event type
+        let payload = match &event.payload {
             EventPayload::TransmitAir(tx) => {
-                // Start time is the event time, end time is from the event
-                (Some(event.time.as_secs_f64()), Some(tx.end_time.as_secs_f64()))
+                let hex = hex::encode(&tx.packet.payload);
+                let payload_hash = tx.packet.payload_hash_label();
+                let packet_json = tx.packet.decoded()
+                    .and_then(|p| serde_json::to_value(p).ok());
+                TracePayload::TxPacket(TxPacketPayload {
+                    direction: "TX".to_string(),
+                    rssi: format!("{} dBm", tx.params.tx_power_dbm),
+                    payload_hash,
+                    packet_hex: hex,
+                    packet: packet_json,
+                    packet_start_time_s: event.time.as_secs_f64(),
+                    packet_end_time_s: tx.end_time.as_secs_f64(),
+                })
             },
             EventPayload::RadioRxPacket(rx) => {
-                // Start and end times are from the reception event
-                (Some(rx.start_time.as_secs_f64()), Some(rx.end_time.as_secs_f64()))
+                let hex = hex::encode(&rx.packet.payload);
+                let payload_hash = rx.packet.payload_hash_label();
+                let packet_json = rx.packet.decoded()
+                    .and_then(|p| serde_json::to_value(p).ok());
+                let reception_status = if rx.was_collided {
+                    "collided".to_string()
+                } else if rx.was_weak_signal {
+                    "weak".to_string()
+                } else {
+                    "ok".to_string()
+                };
+                TracePayload::RxPacket(RxPacketPayload {
+                    direction: "RX".to_string(),
+                    snr: format!("{:.1} dB", rx.snr_db),
+                    rssi: format!("{:.1} dBm", rx.rssi_dbm),
+                    payload_hash,
+                    packet_hex: hex,
+                    packet: packet_json,
+                    reception_status,
+                    packet_start_time_s: rx.start_time.as_secs_f64(),
+                    packet_end_time_s: rx.end_time.as_secs_f64(),
+                })
             },
-            _ => (None, None),
-        };
-
-        let (entry_type, direction, snr, rssi) = match &event.payload {
-            EventPayload::TransmitAir(tx) => (
-                "PACKET".to_string(),
-                "TX".to_string(),
-                "N/A".to_string(),
-                format!("{} dBm", tx.params.tx_power_dbm),
-            ),
-            EventPayload::RadioRxPacket(rx) => (
-                "PACKET".to_string(),
-                "RX".to_string(),
-                format!("{:.1} dB", rx.snr_db),
-                format!("{:.1} dBm", rx.rssi_dbm),
-            ),
-            EventPayload::MessageSend(msg) => (
-                "MESSAGE".to_string(),
-                "TX".to_string(),
-                "N/A".to_string(),
-                format!("dest={:?}", msg.destination),
-            ),
-            EventPayload::MessageReceived(_) => (
-                "MESSAGE".to_string(),
-                "RX".to_string(),
-                "N/A".to_string(),
-                "N/A".to_string(),
-            ),
-            EventPayload::Timer { timer_id } => (
-                format!("TIMER({})", timer_id),
-                "INT".to_string(),
-                "N/A".to_string(),
-                "N/A".to_string(),
-            ),
+            EventPayload::MessageSend(msg) => {
+                TracePayload::MessageSend(MessageSendPayload {
+                    direction: "TX".to_string(),
+                    destination: format!("{:?}", msg.destination),
+                })
+            },
+            EventPayload::MessageReceived(_) => {
+                TracePayload::MessageReceived(MessageReceivedPayload {
+                    direction: "RX".to_string(),
+                })
+            },
+            EventPayload::Timer { timer_id } => {
+                TracePayload::Timer(TimerPayload {
+                    timer_id: *timer_id,
+                })
+            },
             _ => return, // Don't record other event types
         };
 
         let entry = TraceEntry {
-            origin: format!("Entity_{}", event.source.0),
+            origin,
             origin_id: format!("{}", event.source.0),
             timestamp,
-            entry_type,
-            direction,
-            snr,
-            rssi,
-            packet_hex,
-            packet: packet_json,
-            reception_status,
-            packet_start_time_s,
-            packet_end_time_s,
+            payload,
         };
 
         self.trace.record(entry);

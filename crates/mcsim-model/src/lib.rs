@@ -449,6 +449,10 @@ pub struct NodeInfo {
     pub firmware_entity_id: u64,
     /// Entity ID of the radio entity.
     pub radio_entity_id: u64,
+    /// Entity ID of the agent entity (for Companions).
+    pub agent_entity_id: Option<u64>,
+    /// Entity ID of the CLI agent entity (for Repeaters/RoomServers with CLI config).
+    pub cli_agent_entity_id: Option<u64>,
     /// Geographic location of the node.
     pub location: GeoCoord,
     /// Public key (32 bytes).
@@ -679,11 +683,14 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                 event_id_counter += 1;
 
                 // Record node info
+                let cli_agent_id = node_name_to_cli_agent_id.get(&node.name).copied();
                 node_infos.push(NodeInfo {
                     name: node.name.clone(),
                     node_type: "Repeater".to_string(),
                     firmware_entity_id: firmware_id.0,
                     radio_entity_id: radio_id.0,
+                    agent_entity_id: None,
+                    cli_agent_entity_id: cli_agent_id.map(|id| id.0),
                     location: position.clone(),
                     public_key,
                     uart_port,
@@ -717,6 +724,8 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                     node_type: "Companion".to_string(),
                     firmware_entity_id: firmware_id.0,
                     radio_entity_id: radio_id.0,
+                    agent_entity_id: agent_id.map(|id| id.0),
+                    cli_agent_entity_id: None,
                     location: position.clone(),
                     public_key,
                     uart_port,
@@ -766,11 +775,14 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                 });
                 event_id_counter += 1;
                 
+                let cli_agent_id = node_name_to_cli_agent_id.get(&node.name).copied();
                 node_infos.push(NodeInfo {
                     name: node.name.clone(),
                     node_type: "RoomServer".to_string(),
                     firmware_entity_id: firmware_id.0,
                     radio_entity_id: radio_id.0,
+                    agent_entity_id: None,
+                    cli_agent_entity_id: cli_agent_id.map(|id| id.0),
                     location: position.clone(),
                     public_key,
                     uart_port,
