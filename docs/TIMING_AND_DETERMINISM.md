@@ -731,6 +731,9 @@ The `--output` flag records a JSON trace file containing all simulation events. 
   - `reception_status`: "ok", "collided", or "weak"
 - **Timer events**:
   - `timer_id`: Timer identifier (no direction, SNR, or RSSI fields)
+- **Firmware log events**:
+  - `type`: "LOG"
+  - `line`: Single log line emitted by firmware (from `Serial.print` / debug macros)
 
 **Example TX trace entry** (abbreviated for brevity):
 ```json
@@ -798,6 +801,17 @@ The `--output` flag records a JSON trace file containing all simulation events. 
 }
 ```
 
+**Example LOG trace entry** (abbreviated for brevity):
+```json
+{
+  "origin": "Repeater1",
+  "origin_id": "2",
+  "timestamp": "2025-01-01T00:00:01.000Z",
+  "type": "LOG",
+  "line": "DEBUG: recv matches no peers, src_hash=AF"
+}
+```
+
 **Example Timer trace entry**:
 ```json
 {
@@ -820,6 +834,36 @@ Use the `--trace` flag to enable detailed logging:
 ```bash
 mcsim --model network.yaml --trace "Alice,Bob"
 mcsim --model network.yaml --trace "*"  # All entities
+```
+
+### Filtering JSON Trace Output
+
+Use `jq` to filter the `--output` trace and keep only the fields you care about:
+
+```bash
+jq '.[] | select((.type != "TIMER"))
+| {type, timestamp, origin, direction, payload_hash, packet_start_time_s, packet_end_time_s, reception_status, line}
+| with_entries(select(.value != null))' trace.json
+```
+
+Example output:
+
+```json
+{
+  "type": "LOG",
+  "timestamp": "2025-01-01T00:02:02.000Z",
+  "origin": "Repeater2",
+  "line": "DEBUG: 00:00:00 - 1/1/2024 U Dispatcher::loop(): ERROR: send start failed!"
+}
+{
+  "type": "PACKET",
+  "timestamp": "2025-01-01T00:02:02.000Z",
+  "origin": "Repeater3",
+  "direction": "TX",
+  "payload_hash": "841DBF8FD9CC7CEF",
+  "packet_start_time_s": 122.0001,
+  "packet_end_time_s": 122.399972
+}
 ```
 
 ### Reproducing Issues

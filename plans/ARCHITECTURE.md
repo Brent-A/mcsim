@@ -838,6 +838,8 @@ pub enum TracePayload {
     MessageSend { direction: String, destination: String },
     #[serde(rename = "MESSAGE")]
     MessageReceived { direction: String },
+    #[serde(rename = "LOG")]
+    FirmwareLog { line: String },
 }
 
 impl TraceRecorder {

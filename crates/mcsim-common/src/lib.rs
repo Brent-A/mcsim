@@ -509,6 +509,10 @@ pub enum EventPayload {
     /// Serial data to be sent to external source (e.g., TCP client).
     SerialTx(SerialTxEvent),
 
+    // =========== Firmware Log Events ==========
+    /// Firmware log output (typically from Serial.print/DEBUG).
+    FirmwareLog(FirmwareLogEvent),
+
     // =========== Agent Layer Events ===========
     /// Request to send a message.
     MessageSend(MessageSendEvent),
@@ -541,6 +545,13 @@ pub struct SerialRxEvent {
 pub struct SerialTxEvent {
     /// The data to send.
     pub data: Vec<u8>,
+}
+
+/// Firmware log output emitted by the node.
+#[derive(Debug, Clone)]
+pub struct FirmwareLogEvent {
+    /// Log line emitted by firmware.
+    pub line: String,
 }
 
 // ============================================================================

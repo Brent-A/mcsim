@@ -284,6 +284,12 @@ fn describe_event_payload(payload: &EventPayload) -> (String, Vec<(String, Strin
             ];
             ("SerialTx".to_string(), details)
         }
+        EventPayload::FirmwareLog(e) => {
+            let details = vec![
+                ("line_len".to_string(), format!("{}", e.line.len())),
+            ];
+            ("FirmwareLog".to_string(), details)
+        }
         EventPayload::MessageSend(e) => {
             let details = vec![
                 ("destination".to_string(), format!("{:?}", e.destination)),

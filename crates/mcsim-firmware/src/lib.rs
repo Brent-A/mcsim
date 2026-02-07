@@ -31,7 +31,7 @@ use dll::{DllError, FirmwareDll, FirmwareType, NodeConfig, OwnedFirmwareNode};
 pub use dll::{YieldReason, FirmwareSimulationParams};
 use mcsim_common::{
     entity_tracer::FirmwareYieldReason,
-    Entity, EntityId, Event, EventPayload, NodeId, SimContext, SimError, SimTime,
+    Entity, EntityId, Event, EventPayload, FirmwareLogEvent, NodeId, SimContext, SimError, SimTime,
 };
 use meshcore_packet::EncryptionKey;
 use serde::{Deserialize, Serialize};
@@ -71,6 +71,23 @@ fn describe_event(payload: &EventPayload) -> String {
             format!("Timer(id={})", timer_id)
         }
         _ => format!("{:?}", std::mem::discriminant(payload)),
+    }
+}
+
+fn emit_firmware_log_events(ctx: &mut SimContext, log_str: &str) {
+    if log_str.is_empty() {
+        return;
+    }
+    for line in log_str.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        ctx.post_immediate(
+            Vec::new(),
+            EventPayload::FirmwareLog(FirmwareLogEvent {
+                line: line.to_string(),
+            }),
+        );
     }
 }
 
@@ -463,6 +480,7 @@ impl Entity for RepeaterFirmware {
         // Log firmware output
         let log_str = result.log_output();
         tracer.log_firmware_output(Some(&self.name), self.id, event.time, &log_str);
+        emit_firmware_log_events(ctx, &log_str);
 
         Ok(())
     }
@@ -852,6 +870,7 @@ impl Entity for CompanionFirmware {
         // Log firmware output
         let log_str = result.log_output();
         tracer.log_firmware_output(Some(&self.name), self.id, event.time, &log_str);
+        emit_firmware_log_events(ctx, &log_str);
 
         Ok(())
     }
@@ -1234,6 +1253,7 @@ impl Entity for RoomServerFirmware {
         // Log firmware output
         let log_str = result.log_output();
         tracer.log_firmware_output(Some(&self.name), self.id, event.time, &log_str);
+        emit_firmware_log_events(ctx, &log_str);
 
         Ok(())
     }
