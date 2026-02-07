@@ -87,6 +87,10 @@ fn describe_event_payload(payload: &EventPayload) -> (String, String) {
             "SerialTx".to_string(),
             format!("len={}", e.data.len()),
         ),
+        EventPayload::FirmwareLog(e) => (
+            "FirmwareLog".to_string(),
+            format!("line_len={}", e.line.len()),
+        ),
         EventPayload::MessageSend(e) => (
             "MessageSend".to_string(),
             format!("to={:?}, content_len={}", e.destination, e.content.len()),
