@@ -1094,8 +1094,11 @@ impl MeshCorePacket {
     /// - Returns first 8 bytes as u64
     ///
     /// This is used to identify unique packets across different routing paths.
-    /// The hash excludes the route type and path since those can change as
-    /// a packet is forwarded.
+    /// In general, the hash excludes the route type and full path bytes since
+    /// those can change as a packet is forwarded. However, for `TRACE` packets,
+    /// the path length (`path_len`) is intentionally included in the hashed input
+    /// so that different trace path lengths produce different hashes. No other
+    /// path-related fields contribute to this hash.
     pub fn payload_hash(&self) -> u64 {
         use sha2::{Sha256, Digest};
         
