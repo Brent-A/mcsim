@@ -58,10 +58,10 @@ mod real_impl {
     /// Format a decoded packet for display in rerun logs.
     /// Returns a string with packet hash, type, path info, and payload details.
     fn format_packet_decode(packet_bytes: &[u8]) -> String {
-        // Calculate payload hash from raw bytes
+        // Calculate payload hash from raw bytes (full 64-bit hash for consistency)
         let hash = MeshCorePacket::payload_hash_from_bytes(packet_bytes)
-            .map(|h| format!("{:08X}", h & 0xFFFFFFFF)) // Show lower 32 bits for brevity
-            .unwrap_or_else(|| "????????".to_string());
+            .map(|h| format!("{:016X}", h))
+            .unwrap_or_else(|| "????????????????".to_string());
 
         // Try to decode the packet
         match MeshCorePacket::decode(packet_bytes) {
