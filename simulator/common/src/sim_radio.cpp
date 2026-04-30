@@ -193,6 +193,11 @@ void SimRadio::onSendFinished() {
 }
 
 void SimRadio::notifyTxComplete() {
+    if (!tx_in_progress_) {
+        // Already released (e.g. via timeout path in onSendFinished) - ignore
+        MESH_DEBUG_PRINTLN("SimRadio::notifyTxComplete(): tx already released, ignoring");
+        return;
+    }
     tx_in_progress_ = false;
     MESH_DEBUG_PRINTLN("SimRadio::notifyTxComplete(): tx completed (tx_in_progress_ = false)");
     state_version_++;  // State changed - TX complete notification
@@ -231,6 +236,11 @@ int SimRadio::getNoiseFloor() const {
 
 void SimRadio::injectRxPacket(const uint8_t* data, size_t len, float rssi, float snr) {
     std::lock_guard<std::mutex> lock(rx_mutex_);
+    
+    // Half-duplex: real LoRa hardware cannot receive while transmitting
+    if (tx_in_progress_) {
+        return;
+    }
     
     // Check queue depth - drop if full (simulates FIFO overflow)
     if (rx_queue_.size() >= RX_QUEUE_DEPTH) {

@@ -106,6 +106,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", simulator_dir.display());
     println!("cargo:rerun-if-changed={}", meshcore_src.display());
     println!("cargo:rerun-if-changed={}", meshcore_lib.display());
+    println!("cargo:rerun-if-changed={}", meshcore_examples.display());
 
     // Build each firmware DLL
     build_firmware_dll(

@@ -1,0 +1,96 @@
+# Simple MeshCore Network - Marginal Links
+# Same chain as simple.yaml but with links near the LoRa sensitivity threshold.
+# Designed to expose per-hop delivery failures so that the repeated-sending
+# retransmit mechanism can be exercised and measured.
+#
+# At SF7/BW62.5kHz the demodulation threshold is -7.5 dB SNR.
+# Links here use mean_snr=-3.0 dB with snr_std_dev=4.0 dB, giving
+# approximately 13% per-packet failure probability per hop.
+#
+# Network topology:
+#   [Alice:Companion] <---> [Repeater1] <---> [Repeater2] <---> [Repeater3] <---> [Bob:Companion]
+#
+# Expected delivery WITHOUT retransmits: ~57%  (0.87^4)
+# Expected delivery WITH 1 retransmit:   ~93%  (1-0.13^2)^4
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+
+nodes:
+  - name: "Repeater1"
+    location:
+      lat: 47.6000
+      lon: -122.4000
+    firmware:
+      type: Repeater
+
+  - name: "Repeater2"
+    location:
+      lat: 47.6100
+      lon: -122.3800
+    firmware:
+      type: Repeater
+
+  - name: "Repeater3"
+    location:
+      lat: 47.6200
+      lon: -122.3600
+    firmware:
+      type: Repeater
+
+  - name: "Alice"
+    location:
+      lat: 47.5950
+      lon: -122.4050
+    firmware:
+      type: Companion
+
+  - name: "Bob"
+    location:
+      lat: 47.6250
+      lon: -122.3550
+    firmware:
+      type: Companion
+
+edges:
+  - from: "Alice"
+    to: "Repeater1"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+  - from: "Repeater1"
+    to: "Alice"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+
+  - from: "Repeater1"
+    to: "Repeater2"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+  - from: "Repeater2"
+    to: "Repeater1"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+
+  - from: "Repeater2"
+    to: "Repeater3"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+  - from: "Repeater3"
+    to: "Repeater2"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+
+  - from: "Repeater3"
+    to: "Bob"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+  - from: "Bob"
+    to: "Repeater3"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
