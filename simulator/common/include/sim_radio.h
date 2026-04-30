@@ -49,6 +49,10 @@ public:
     float getLastSNR() const override;
     int getNoiseFloor() const override;
     
+    // Hardware-specific stubs (no-op in simulation)
+    void setRxBoostedGainMode(bool enabled) { rx_boosted_gain_ = enabled; }
+    bool getRxBoostedGainMode() const { return rx_boosted_gain_; }
+
     // Statistics interface (used by firmware)
     uint32_t getPacketsRecv() const { return packets_recv_; }
     uint32_t getPacketsSent() const { return packets_sent_; }
@@ -83,6 +87,7 @@ private:
     uint8_t sf_;
     uint8_t cr_;
     uint8_t tx_power_;
+    bool rx_boosted_gain_;
     
     // RX queue (packets injected by coordinator)
     std::queue<RxPacket> rx_queue_;
