@@ -4881,7 +4881,6 @@ name = "mcsim-firmware"
 version = "0.1.0"
 dependencies = [
  "libloading",
- "log",
  "mcsim-common",
  "meshcore-packet",
  "rand 0.8.5",

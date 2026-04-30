@@ -55,6 +55,9 @@ struct SpinDetectionConfig {
 
     /// Track total loop iterations across all steps.
     uint64_t total_loop_iterations = 0;
+
+    /// Request an immediate idle yield due to spin detection.
+    bool spin_yield_requested = false;
 };
 
 // ============================================================================

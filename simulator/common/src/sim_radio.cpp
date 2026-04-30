@@ -100,6 +100,7 @@ float SimRadio::packetScore(float snr, int packet_len) {
 
 bool SimRadio::startSendRaw(const uint8_t* bytes, int len) {
     if (tx_in_progress_) {
+        MESH_DEBUG_PRINTLN("SimRadio::startSendRaw(): tx already in progress, return false");
         return false;
     }
     
@@ -111,6 +112,7 @@ bool SimRadio::startSendRaw(const uint8_t* bytes, int len) {
     tx_len_ = len;
     tx_pending_ = true;
     tx_in_progress_ = true;
+    MESH_DEBUG_PRINTLN("SimRadio::startSendRaw(): tx in progress now");
     recv_mode_ = false;
     state_version_++;  // State changed - starting TX
     
@@ -138,8 +140,9 @@ void SimRadio::checkForSpin() {
         last_polled_version_ = state_version_;
         poll_count_ = 0;
         // Yield to give coordinator a chance to process
+        // Request an idle yield without overwriting non-idle reasons.
         if (g_sim_ctx) {
-            g_sim_ctx->step_result.reason = SIM_YIELD_IDLE;
+            g_sim_ctx->spin_config.spin_yield_requested = true;
         }
         return;
     }
@@ -166,7 +169,8 @@ void SimRadio::checkForSpin() {
                        poll_count_, threshold, g_sim_ctx->spin_config.spin_detection_count);
             }
             
-            g_sim_ctx->step_result.reason = SIM_YIELD_IDLE;
+            // Request an idle yield without overwriting non-idle reasons.
+            g_sim_ctx->spin_config.spin_yield_requested = true;
         }
         
         poll_count_ = 0;
@@ -181,12 +185,16 @@ bool SimRadio::isSendComplete() {
 
 void SimRadio::onSendFinished() {
     tx_pending_ = false;
+    // Ensure TX is fully released even on timeout paths.
+    tx_in_progress_ = false;
     recv_mode_ = true;
     state_version_++;  // State changed - TX finished
+    MESH_DEBUG_PRINTLN("SimRadio::onSendFinished(): tx finished"); 
 }
 
 void SimRadio::notifyTxComplete() {
     tx_in_progress_ = false;
+    MESH_DEBUG_PRINTLN("SimRadio::notifyTxComplete(): tx completed (tx_in_progress_ = false)");
     state_version_++;  // State changed - TX complete notification
 }
 

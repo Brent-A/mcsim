@@ -12,6 +12,7 @@
 //! - Configurable PHY parameters ([`LoraPhyConfig`])
 
 use mcsim_common::{
+    entity_tracer::TraceEvent,
     Entity, EntityId, Event, EventPayload, GeoCoord, SimContext, SimError,
     SimTime,
 };
@@ -548,6 +549,16 @@ impl Radio {
     /// Notify firmware of state change.
     fn notify_state_change(&mut self, ctx: &mut SimContext, new_state: mcsim_common::RadioState) {
         self.state_version += 1;
+        ctx.tracer().log(TraceEvent::custom(
+            None,
+            self.id,
+            ctx.time(),
+            format!(
+                "Radio state {:?} (ver={})",
+                new_state,
+                self.state_version
+            ),
+        ));
         ctx.post_immediate(
             vec![self.attached_firmware],
             EventPayload::RadioStateChanged(mcsim_common::RadioStateChangedEvent {
@@ -668,6 +679,15 @@ impl Radio {
             
             // Schedule TX completion + RX turnaround
             let total_delay = airtime + self.config.tx_to_rx_turnaround;
+            ctx.tracer().log(TraceEvent::custom(
+                None,
+                self.id,
+                ctx.time(),
+                format!(
+                    "Schedule rx_turnaround_complete delay_us={}",
+                    total_delay.as_micros()
+                ),
+            ));
             ctx.post_event(
                 total_delay,
                 vec![self.id],
@@ -808,6 +828,8 @@ impl Entity for Radio {
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &mut SimContext) -> Result<(), SimError> {
+        // Emit standard EVENT_RX traces for radio entity events.
+        ctx.tracer().log_event_received(None, self.id, ctx.time(), event);
         match &event.payload {
             EventPayload::RadioTxRequest(tx_request) => {
                 // Firmware requests transmission
@@ -821,9 +843,24 @@ impl Entity for Radio {
                 // Handle internal timers
                 if *timer_id == TIMER_TX_TURNAROUND_COMPLETE {
                     // TX turnaround complete - start actual transmission
+                    ctx.tracer().log(TraceEvent::custom(
+                        None,
+                        self.id,
+                        ctx.time(),
+                        "Timer tx_turnaround_complete".to_string(),
+                    ));
                     self.start_transmission(ctx);
                 } else if *timer_id == TIMER_RX_TURNAROUND_COMPLETE {
                     // RX turnaround complete - back to receiving
+                    ctx.tracer().log(TraceEvent::custom(
+                        None,
+                        self.id,
+                        ctx.time(),
+                        format!(
+                            "Timer rx_turnaround_complete pending_tx={}",
+                            self.pending_tx.is_some()
+                        ),
+                    ));
                     self.state = InternalRadioState::Receiving;
                     self.current_tx = None;
                     self.notify_state_change(ctx, mcsim_common::RadioState::Receiving);

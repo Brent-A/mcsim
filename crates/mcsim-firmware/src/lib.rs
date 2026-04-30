@@ -30,7 +30,7 @@ pub mod tracer;
 use dll::{DllError, FirmwareDll, FirmwareType, NodeConfig, OwnedFirmwareNode};
 pub use dll::{YieldReason, FirmwareSimulationParams};
 use mcsim_common::{
-    entity_tracer::FirmwareYieldReason,
+    entity_tracer::{FirmwareYieldReason, TraceEvent},
     Entity, EntityId, Event, EventPayload, FirmwareLogEvent, NodeId, SimContext, SimError, SimTime,
 };
 use meshcore_packet::EncryptionKey;
@@ -334,10 +334,16 @@ impl Entity for RepeaterFirmware {
         if event_time_us < self.startup_time_us {
             // Drop all events before startup time (radio, serial, timer)
             tracer.log_event_received(Some(&self.name), self.id, event.time, event);
-            log::trace!(
-                "[{}] Dropping event during startup delay: {:?} (event_time={}us < startup={}us)",
-                self.name, event.payload, event_time_us, self.startup_time_us
-            );
+            tracer.log(TraceEvent::custom(
+                Some(&self.name),
+                self.id,
+                event.time,
+                format!(
+                    "Drop event during startup delay event_time_us={} startup_us={}",
+                    event_time_us,
+                    self.startup_time_us
+                ),
+            ));
             return Ok(());
         }
 
@@ -361,10 +367,27 @@ impl Entity for RepeaterFirmware {
             }
             EventPayload::RadioStateChanged(state_event) => {
                 // Notify DLL of state change (for spin detection)
+                tracer.log(TraceEvent::custom(
+                    Some(&self.name),
+                    self.id,
+                    event.time,
+                    format!(
+                        "RadioStateChanged {:?} state_version={} awaiting_tx_complete={}",
+                        state_event.new_state,
+                        state_event.state_version,
+                        self.awaiting_tx_complete
+                    ),
+                ));
                 self.node.notify_state_change(state_event.state_version);
                 
                 // Radio state changed - TX complete transitions back to Receiving
                 if state_event.new_state == mcsim_common::RadioState::Receiving && self.awaiting_tx_complete {
+                    tracer.log(TraceEvent::custom(
+                        Some(&self.name),
+                        self.id,
+                        event.time,
+                        "notify_tx_complete".to_string(),
+                    ));
                     self.node.notify_tx_complete();
                     self.awaiting_tx_complete = false;
                     self.pending_tx = None;
@@ -723,10 +746,16 @@ impl Entity for CompanionFirmware {
         if event_time_us < self.startup_time_us {
             // Drop all events before startup time (radio, serial, timer)
             tracer.log_event_received(Some(&self.name), self.id, event.time, event);
-            log::trace!(
-                "[{}] Dropping event during startup delay: {:?} (event_time={}us < startup={}us)",
-                self.name, event.payload, event_time_us, self.startup_time_us
-            );
+            tracer.log(TraceEvent::custom(
+                Some(&self.name),
+                self.id,
+                event.time,
+                format!(
+                    "Drop event during startup delay event_time_us={} startup_us={}",
+                    event_time_us,
+                    self.startup_time_us
+                ),
+            ));
             return Ok(());
         }
 
@@ -756,9 +785,26 @@ impl Entity for CompanionFirmware {
             }
             EventPayload::RadioStateChanged(state_event) => {
                 // Notify DLL of state change (for spin detection)
+                tracer.log(TraceEvent::custom(
+                    Some(&self.name),
+                    self.id,
+                    event.time,
+                    format!(
+                        "RadioStateChanged {:?} state_version={} awaiting_tx_complete={}",
+                        state_event.new_state,
+                        state_event.state_version,
+                        self.awaiting_tx_complete
+                    ),
+                ));
                 self.node.notify_state_change(state_event.state_version);
                 
                 if state_event.new_state == mcsim_common::RadioState::Receiving && self.awaiting_tx_complete {
+                    tracer.log(TraceEvent::custom(
+                        Some(&self.name),
+                        self.id,
+                        event.time,
+                        "notify_tx_complete".to_string(),
+                    ));
                     self.node.notify_tx_complete();
                     self.awaiting_tx_complete = false;
                     self.pending_tx = None;
@@ -1113,10 +1159,16 @@ impl Entity for RoomServerFirmware {
         if event_time_us < self.startup_time_us {
             // Drop all events before startup time (radio, serial, timer)
             tracer.log_event_received(Some(&self.name), self.id, event.time, event);
-            log::trace!(
-                "[{}] Dropping event during startup delay: {:?} (event_time={}us < startup={}us)",
-                self.name, event.payload, event_time_us, self.startup_time_us
-            );
+            tracer.log(TraceEvent::custom(
+                Some(&self.name),
+                self.id,
+                event.time,
+                format!(
+                    "Drop event during startup delay event_time_us={} startup_us={}",
+                    event_time_us,
+                    self.startup_time_us
+                ),
+            ));
             return Ok(());
         }
 
@@ -1139,9 +1191,26 @@ impl Entity for RoomServerFirmware {
             }
             EventPayload::RadioStateChanged(state_event) => {
                 // Notify DLL of state change (for spin detection)
+                tracer.log(TraceEvent::custom(
+                    Some(&self.name),
+                    self.id,
+                    event.time,
+                    format!(
+                        "RadioStateChanged {:?} state_version={} awaiting_tx_complete={}",
+                        state_event.new_state,
+                        state_event.state_version,
+                        self.awaiting_tx_complete
+                    ),
+                ));
                 self.node.notify_state_change(state_event.state_version);
                 
                 if state_event.new_state == mcsim_common::RadioState::Receiving && self.awaiting_tx_complete {
+                    tracer.log(TraceEvent::custom(
+                        Some(&self.name),
+                        self.id,
+                        event.time,
+                        "notify_tx_complete".to_string(),
+                    ));
                     self.node.notify_tx_complete();
                     self.awaiting_tx_complete = false;
                     self.pending_tx = None;
