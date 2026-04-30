@@ -1,0 +1,27 @@
+# Retry Stress Behavior
+#
+# Alice sends 20 direct messages to Bob.  The 60 s warmup lets route discovery
+# complete before the first message.  The 10 s interval between messages gives
+# the retry mechanism enough time to attempt all three transmissions and receive
+# the ACK before the next message is due.
+#
+# Designed for use with retry_showcase.yaml (--duration 300s).
+#
+# Retry timing recap (SF7, BW 62.5 kHz, path_len=1):
+#   TX1 airtime:          ~164 ms
+#   Silence + retry delay: 164 + 300 = 464 ms
+#   TX2 fires at:         ~728 ms after TX1 start
+#   TX3 fires at:        ~1456 ms after TX1 start
+#   Total worst-case window: ~2 s  →  10 s interval is ample
+
+nodes:
+  - name: "Alice"
+    agent:
+      direct:
+        enabled: true
+        message_count: 20
+        session_message_count: 1
+        startup_s: 90
+        session_interval_s: 10
+        targets:
+          - "Bob"
