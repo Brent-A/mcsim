@@ -189,8 +189,13 @@ pub struct NodeConfig {
     /// Alignment padding.
     _padding: [u8; 2],
 
+    /// Geographic position — passed to repeater firmware so corridor checks work.
+    /// Set to (0.0, 0.0) to let the firmware default (fail-open: always forward).
+    pub node_lat: f64,
+    pub node_lon: f64,
+
     /// Reserved for future use.
-    _reserved: [u8; 56],
+    _reserved: [u8; 40],
 }
 
 impl Default for NodeConfig {
@@ -212,7 +217,9 @@ impl Default for NodeConfig {
             log_spin_detection: 0,
             log_loop_iterations: 0,
             _padding: [0; 2],
-            _reserved: [0; 56],
+            node_lat: 0.0,
+            node_lon: 0.0,
+            _reserved: [0; 40],
         }
     }
 }
@@ -263,6 +270,13 @@ impl NodeConfig {
     pub fn with_spin_detection(mut self, threshold: u32, idle_loops: u32) -> Self {
         self.spin_detection_threshold = threshold;
         self.idle_loops_before_yield = idle_loops;
+        self
+    }
+
+    /// Set the geographic position of the node.
+    pub fn with_location(mut self, lat: f64, lon: f64) -> Self {
+        self.node_lat = lat;
+        self.node_lon = lon;
         self
     }
 

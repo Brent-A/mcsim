@@ -25,6 +25,7 @@ use mcsim_companion_protocol::{
     PublicKeyPrefix, ReceivedChannelMessage, ReceivedContactMessage, Response, TextType,
     ADV_TYPE_CHAT, ADV_TYPE_REPEATER, ADV_TYPE_ROOM_SERVER, MAX_PATH_SIZE,
 };
+use meshcore_packet::CorridorTriple;
 use mcsim_metrics::{metric_defs, MetricLabels};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
@@ -206,6 +207,9 @@ pub struct ChannelMessageConfig {
     /// Time before the agent stops sending.
     /// If None, the agent sends indefinitely.
     pub shutdown_s: Option<f64>,
+    /// Geo-corridor triples for scoped flood delivery.
+    /// If non-empty, the agent uses CMD_SEND_CHANNEL_TXT_MSG_CORRIDOR.
+    pub corridor: Vec<CorridorTriple>,
 }
 
 impl Default for ChannelMessageConfig {
@@ -223,6 +227,7 @@ impl Default for ChannelMessageConfig {
             session_interval_jitter_s: 0.0,
             message_count: None,
             shutdown_s: None,
+            corridor: Vec::new(),
         }
     }
 }
@@ -831,11 +836,23 @@ impl Agent {
 
         self.send_command(
             ctx,
-            &Command::SendChannelTextMessage {
-                text_type: TextType::Plain,
-                channel_idx,
-                timestamp,
-                text: content,
+            &if self.config.channel.corridor.is_empty() {
+                Command::SendChannelTextMessage {
+                    text_type: TextType::Plain,
+                    channel_idx,
+                    timestamp,
+                    text: content,
+                }
+            } else {
+                Command::SendChannelTextMessageWithCorridor {
+                    text_type: TextType::Plain,
+                    channel_idx,
+                    timestamp,
+                    text: content,
+                    encoded_triples: self.config.channel.corridor.iter()
+                        .map(|t| t.encode())
+                        .collect(),
+                }
             },
         );
 

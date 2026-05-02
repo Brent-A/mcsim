@@ -94,6 +94,11 @@ struct RepeaterSimNode : public SimNodeImpl {
             NodePrefs* prefs = mesh->getNodePrefs();
             strncpy(prefs->node_name, config.node_name, sizeof(prefs->node_name) - 1);
             prefs->node_name[sizeof(prefs->node_name) - 1] = '\0';
+
+            // Propagate geographic position so that corridor checks work correctly.
+            // The firmware guards on (0,0) → fail-open, so zero means "position unknown".
+            prefs->node_lat = config.node_lat;
+            prefs->node_lon = config.node_lon;
         }
         
         // Reset command buffer

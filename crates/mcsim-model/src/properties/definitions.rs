@@ -470,6 +470,16 @@ pub const AGENT_CHANNEL_SHUTDOWN_S: Property<Option<f64>, NodeScope> = Property:
 .with_type(PropertyType::new(PropertyBaseType::Float).nullable())
 .with_unit("s");
 
+/// Geo-corridor waypoints for scoped channel flood delivery.
+/// Each entry is a string formatted as "lat,lon,radius_km" (e.g. "47.6,-122.3,50.0").
+/// When non-empty the agent uses CMD_SEND_CHANNEL_TXT_MSG_CORRIDOR.
+pub const AGENT_CHANNEL_CORRIDOR: Property<Vec<String>, NodeScope> = Property::new(
+    "agent/channel/corridor",
+    "Geo-corridor waypoints for scoped flood delivery (lat,lon,radius_km per entry)",
+    PropertyDefault::Vec(&[]),
+)
+.with_type(PropertyType::new(PropertyBaseType::String).array());
+
 // ============================================================================
 // Metrics Properties (Node scope)
 // ============================================================================

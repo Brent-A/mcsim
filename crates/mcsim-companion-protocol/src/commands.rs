@@ -46,6 +46,21 @@ pub enum Command {
         text: String,
     },
 
+    /// Send a text message to a channel with geo-corridor scope.
+    /// `encoded_triples` contains the 32-bit wire-encoded corridor triples.
+    SendChannelTextMessageWithCorridor {
+        /// Message type (should be Plain).
+        text_type: TextType,
+        /// Channel index.
+        channel_idx: u8,
+        /// Message timestamp.
+        timestamp: u32,
+        /// Message text.
+        text: String,
+        /// Pre-encoded corridor triples (32-bit wire words, max 8).
+        encoded_triples: Vec<u32>,
+    },
+
     /// Get the list of contacts.
     GetContacts {
         /// Optional 'since' filter (only return contacts modified after this time).
@@ -327,6 +342,7 @@ impl Command {
             Command::AppStart { .. } => CMD_APP_START,
             Command::SendTextMessage { .. } => CMD_SEND_TXT_MSG,
             Command::SendChannelTextMessage { .. } => CMD_SEND_CHANNEL_TXT_MSG,
+            Command::SendChannelTextMessageWithCorridor { .. } => CMD_SEND_CHANNEL_TXT_MSG_CORRIDOR,
             Command::GetContacts { .. } => CMD_GET_CONTACTS,
             Command::GetDeviceTime => CMD_GET_DEVICE_TIME,
             Command::SetDeviceTime { .. } => CMD_SET_DEVICE_TIME,
@@ -417,6 +433,27 @@ impl Command {
                 buf.push(*channel_idx);
                 buf.extend_from_slice(&timestamp.to_le_bytes());
                 buf.extend_from_slice(text.as_bytes());
+            }
+
+            Command::SendChannelTextMessageWithCorridor {
+                text_type,
+                channel_idx,
+                timestamp,
+                text,
+                encoded_triples,
+            } => {
+                buf.push(CMD_SEND_CHANNEL_TXT_MSG_CORRIDOR);
+                buf.push((*text_type).into());
+                buf.push(*channel_idx);
+                buf.extend_from_slice(&timestamp.to_le_bytes());
+                buf.extend_from_slice(text.as_bytes());
+                // Wire format: text | triple0(4) | ... | tripleN-1(4) | count(1)
+                // count byte is at cmd_frame[len-1]; triples at cmd_frame[len-1-n*4..len-1]
+                let n = encoded_triples.len().min(8) as u8;
+                for &word in encoded_triples.iter().take(n as usize) {
+                    buf.extend_from_slice(&word.to_le_bytes());
+                }
+                buf.push(n);
             }
 
             Command::GetContacts { since } => {

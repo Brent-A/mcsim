@@ -57,8 +57,13 @@ typedef struct {
     uint8_t log_loop_iterations;         // Enable debug logging for loop iterations (bool as u8)
     uint8_t _padding[2];                 // Alignment padding
     
+    // Geographic position (used by repeater firmware for corridor checks).
+    // Set to 0.0 to use the firmware default (fail-open: forwards all corridor packets).
+    double node_lat;   // Latitude in decimal degrees (−90 … +90)
+    double node_lon;   // Longitude in decimal degrees (−180 … +180)
+
     // Reserved for future use
-    uint8_t _reserved[56];               // Reduced from 64 to account for new fields
+    uint8_t _reserved[40];               // Reduced from 56 to account for node_lat/node_lon
 } SimNodeConfig;
 
 // ============================================================================

@@ -192,12 +192,18 @@ pub trait FirmwareEntity: Entity {
 pub struct RepeaterConfig {
     /// Base firmware configuration.
     pub base: FirmwareConfig,
+    /// Node latitude (decimal degrees). 0.0 = unknown (fail-open for corridor checks).
+    pub node_lat: f64,
+    /// Node longitude (decimal degrees). 0.0 = unknown (fail-open for corridor checks).
+    pub node_lon: f64,
 }
 
 impl Default for RepeaterConfig {
     fn default() -> Self {
         RepeaterConfig {
             base: FirmwareConfig::default(),
+            node_lat: 0.0,
+            node_lon: 0.0,
         }
     }
 }
@@ -268,6 +274,7 @@ impl RepeaterFirmware {
             .with_initial_time(0, initial_rtc)
             .with_rng_seed(config.base.rng_seed)
             .with_name(&name)
+            .with_location(config.node_lat, config.node_lon)
             .with_spin_detection(
                 sim_params.spin_detection_threshold,
                 sim_params.idle_loops_before_yield,
