@@ -388,6 +388,17 @@ pub const AGENT_DIRECT_SHUTDOWN_S: Property<Option<f64>, NodeScope> = Property::
 .with_type(PropertyType::new(PropertyBaseType::Float).nullable())
 .with_unit("s");
 
+/// Number of uncounted path-warmup DMs to send before the main counted session.
+/// Each warmup DM triggers path discovery (FLOOD → PATH+ACK from Bob → Alice learns
+/// DIRECT route) but is not counted in delivery metrics.
+/// 0 = disabled (default). Warmup DMs use the same ack_timeout_s and
+/// session_interval_s timing as regular messages.
+pub const AGENT_DIRECT_PATH_WARMUP_COUNT: Property<u32, NodeScope> = Property::new(
+    "agent/direct/path_warmup_count",
+    "Number of uncounted warmup DMs to send before the counted session (0 = disabled)",
+    PropertyDefault::Integer(0),
+);
+
 // ============================================================================
 // Agent Channel Message Properties (Node scope)
 // ============================================================================

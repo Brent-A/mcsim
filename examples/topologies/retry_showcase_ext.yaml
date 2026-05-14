@@ -49,15 +49,20 @@
 #   Sidecar  knows: Bob only
 #
 # Expected delivery statistics per message attempt:
-#   P(DM reaches Bob | 1 TX)  = 0.87³ × 0.70² ≈ 32%
-#   P(DM reaches Bob | 3 TX)  = 1 − (1−0.32)³ ≈ 69%
-#   P(ACK reaches Alice)       ≈ 100%  (reliable return path)
-#   → retries raise effective ACK rate from ~32% to ~69%
+#   FLOOD route (first DM, no path discovered yet):
+#     P(DM reaches Bob via FLOOD | 1 TX) = 0.87³ × 0.70² ≈ 32%
+#     Note: Alice's TX2/TX3 are blocked by R1's hasSeen ring-buffer — no retry benefit.
+#     A successful FLOOD DM causes Bob to reply with PATH+ACK, giving Alice Bob's route.
+#   DIRECT route (subsequent DMs after path discovery, max_resend_attempts=3 → 4 TX/hop):
+#     P(reliable hop fails | 4 TX) = 0.13⁴ ≈ 0.03%
+#     P(marginal hop fails  | 4 TX) = 0.30⁴ ≈ 0.81%
+#     P(DM reaches Bob via DIRECT | 4 TX/hop) = (1−0.13⁴)³ × (1−0.30⁴)² ≈ 98.3%
+#   → path_warmup_count=3 in behavior gives ≈68% chance of path discovery before counted session
 #
 # Run with:
 #   cargo run -- run examples/topologies/retry_showcase_ext.yaml \
-#                    examples/behaviors/retry_stress.yaml        \
-#                    --duration 400s --seed 1234 --metrics-output json
+#                    examples/behaviors/retry_stress_ext.yaml    \
+#                    --duration 450s --seed 1234 --metrics-output json
 
 defaults:
   node:
@@ -68,7 +73,7 @@ defaults:
       coding_rate: 5
       tx_power_dbm: 20
     firmware:
-      max_resend_attempts: 2  # Default firmware-level retries (0=disabled, 1-5, default 2)
+      max_resend_attempts: 3  # Default firmware-level retries (0=disabled, 1-5, default 2)
 
 nodes:
   # ── Active communication path ────────────────────────────────────────────
