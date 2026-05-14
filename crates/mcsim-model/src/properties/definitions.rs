@@ -177,6 +177,16 @@ pub const FIRMWARE_STARTUP_JITTER_S: Property<f64, NodeScope> = Property::new(
 )
 .with_unit("s");
 
+/// Maximum number of firmware-level resend attempts per packet.
+/// Controls how many times the repeater/companion firmware will re-transmit a direct-routed
+/// packet after the initial send (0 = disabled, 1-5, default 2).
+/// Applies to Repeater, Companion, and RoomServer node types.
+pub const FIRMWARE_MAX_RESEND_ATTEMPTS: Property<u8, NodeScope> = Property::new(
+    "firmware/max_resend_attempts",
+    "Maximum firmware-level resend attempts per packet (0=disabled, 1-5, default 2). Applies to all node types",
+    PropertyDefault::Integer(2),
+);
+
 // ============================================================================
 // Companion Properties (Node scope)
 // ============================================================================

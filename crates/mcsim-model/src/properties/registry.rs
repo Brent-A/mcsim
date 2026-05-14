@@ -85,6 +85,7 @@ pub const ALL_PROPERTIES: &[&PropertyDef] = &[
     &FIRMWARE_UART_PORT.def,
     &FIRMWARE_STARTUP_TIME_S.def,
     &FIRMWARE_STARTUP_JITTER_S.def,
+    &FIRMWARE_MAX_RESEND_ATTEMPTS.def,
     // Metrics (Node scope)
     &METRICS_GROUPS.def,
     // Metrics (Simulation scope)

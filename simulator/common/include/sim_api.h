@@ -62,8 +62,12 @@ typedef struct {
     double node_lat;   // Latitude in decimal degrees (−90 … +90)
     double node_lon;   // Longitude in decimal degrees (−180 … +180)
 
+    // Maximum number of firmware-level resend attempts per packet (0=disabled, 1-5, default 2).
+    // Overrides the firmware's built-in default of 2.
+    uint8_t max_resend_attempts;
+
     // Reserved for future use
-    uint8_t _reserved[40];               // Reduced from 56 to account for node_lat/node_lon
+    uint8_t _reserved[39];               // Reduced from 40 to account for max_resend_attempts
 } SimNodeConfig;
 
 // ============================================================================

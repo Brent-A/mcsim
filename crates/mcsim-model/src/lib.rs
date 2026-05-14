@@ -46,6 +46,7 @@ pub use properties::{
     LOCATION_LATITUDE, LOCATION_LONGITUDE, LOCATION_ALTITUDE_M,
     SIMULATION_DURATION_S, SIMULATION_SEED, SIMULATION_UART_BASE_PORT,
     FIRMWARE_TYPE, FIRMWARE_UART_PORT, FIRMWARE_STARTUP_TIME_S, FIRMWARE_STARTUP_JITTER_S,
+    FIRMWARE_MAX_RESEND_ATTEMPTS,
     KEYS_PRIVATE_KEY, KEYS_PUBLIC_KEY,
     METRICS_GROUPS, METRICS_WARMUP_S, ROOM_SERVER_ROOM_ID,
     // Firmware simulation properties
@@ -665,6 +666,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                     },
                     node_lat: position.latitude,
                     node_lon: position.longitude,
+                    max_resend_attempts: resolved.get(&FIRMWARE_MAX_RESEND_ATTEMPTS),
                 };
                 let mut firmware = RepeaterFirmware::with_sim_params(firmware_id, fw_config, radio_id, node.name.clone(), &node_firmware_sim_params)?;
                 
@@ -708,6 +710,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                         encryption_key: None,
                         rng_seed: node_rng_seed,
                     },
+                    max_resend_attempts: resolved.get(&FIRMWARE_MAX_RESEND_ATTEMPTS),
                 };
                 let firmware = CompanionFirmware::with_sim_params(firmware_id, fw_config, radio_id, agent_id, node.name.clone(), &node_firmware_sim_params)?;
                 entities.register(Box::new(firmware));
@@ -757,6 +760,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                         rng_seed: node_rng_seed,
                     },
                     room_id,
+                    max_resend_attempts: resolved.get(&FIRMWARE_MAX_RESEND_ATTEMPTS),
                 };
                 
                 let mut firmware = RoomServerFirmware::with_sim_params(firmware_id, fw_config, radio_id, node.name.clone(), &node_firmware_sim_params)?;

@@ -194,8 +194,11 @@ pub struct NodeConfig {
     pub node_lat: f64,
     pub node_lon: f64,
 
+    /// Maximum number of firmware-level resend attempts per packet (0=disabled, 1-5, default 2).
+    pub max_resend_attempts: u8,
+
     /// Reserved for future use.
-    _reserved: [u8; 40],
+    _reserved: [u8; 39],
 }
 
 impl Default for NodeConfig {
@@ -219,7 +222,8 @@ impl Default for NodeConfig {
             _padding: [0; 2],
             node_lat: 0.0,
             node_lon: 0.0,
-            _reserved: [0; 40],
+            max_resend_attempts: 2,
+            _reserved: [0; 39],
         }
     }
 }
@@ -277,6 +281,12 @@ impl NodeConfig {
     pub fn with_location(mut self, lat: f64, lon: f64) -> Self {
         self.node_lat = lat;
         self.node_lon = lon;
+        self
+    }
+
+    /// Set the maximum number of firmware-level resend attempts (0-5).
+    pub fn with_max_resend_attempts(mut self, attempts: u8) -> Self {
+        self.max_resend_attempts = attempts.min(5);
         self
     }
 

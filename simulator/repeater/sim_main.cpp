@@ -99,6 +99,9 @@ struct RepeaterSimNode : public SimNodeImpl {
             // The firmware guards on (0,0) → fail-open, so zero means "position unknown".
             prefs->node_lat = config.node_lat;
             prefs->node_lon = config.node_lon;
+
+            // Override firmware-level resend attempts from simulation config.
+            prefs->max_resend_attempts = config.max_resend_attempts < 6 ? config.max_resend_attempts : 2;
         }
         
         // Reset command buffer

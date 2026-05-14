@@ -94,6 +94,9 @@ struct RoomServerSimNode : public SimNodeImpl {
             NodePrefs* prefs = mesh->getNodePrefs();
             strncpy(prefs->node_name, config.node_name, sizeof(prefs->node_name) - 1);
             prefs->node_name[sizeof(prefs->node_name) - 1] = '\0';
+
+            // Override firmware-level resend attempts from simulation config.
+            prefs->max_resend_attempts = config.max_resend_attempts < 6 ? config.max_resend_attempts : 2;
         }
         
         // Reset CLI command buffer
