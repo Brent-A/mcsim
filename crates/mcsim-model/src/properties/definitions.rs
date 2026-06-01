@@ -177,6 +177,16 @@ pub const FIRMWARE_STARTUP_JITTER_S: Property<f64, NodeScope> = Property::new(
 )
 .with_unit("s");
 
+/// Maximum number of firmware-level resend attempts per packet.
+/// Controls how many times the repeater/companion firmware will re-transmit a direct-routed
+/// packet after the initial send (0 = disabled, 1-5, default 2).
+/// Applies to Repeater, Companion, and RoomServer node types.
+pub const FIRMWARE_MAX_RESEND_ATTEMPTS: Property<u8, NodeScope> = Property::new(
+    "firmware/max_resend_attempts",
+    "Maximum firmware-level resend attempts per packet (0=disabled, 1-5, default 2). Applies to all node types",
+    PropertyDefault::Integer(2),
+);
+
 // ============================================================================
 // Companion Properties (Node scope)
 // ============================================================================
@@ -378,6 +388,17 @@ pub const AGENT_DIRECT_SHUTDOWN_S: Property<Option<f64>, NodeScope> = Property::
 .with_type(PropertyType::new(PropertyBaseType::Float).nullable())
 .with_unit("s");
 
+/// Number of uncounted path-warmup DMs to send before the main counted session.
+/// Each warmup DM triggers path discovery (FLOOD → PATH+ACK from Bob → Alice learns
+/// DIRECT route) but is not counted in delivery metrics.
+/// 0 = disabled (default). Warmup DMs use the same ack_timeout_s and
+/// session_interval_s timing as regular messages.
+pub const AGENT_DIRECT_PATH_WARMUP_COUNT: Property<u32, NodeScope> = Property::new(
+    "agent/direct/path_warmup_count",
+    "Number of uncounted warmup DMs to send before the counted session (0 = disabled)",
+    PropertyDefault::Integer(0),
+);
+
 // ============================================================================
 // Agent Channel Message Properties (Node scope)
 // ============================================================================
@@ -469,6 +490,16 @@ pub const AGENT_CHANNEL_SHUTDOWN_S: Property<Option<f64>, NodeScope> = Property:
 )
 .with_type(PropertyType::new(PropertyBaseType::Float).nullable())
 .with_unit("s");
+
+/// Geo-corridor waypoints for scoped channel flood delivery.
+/// Each entry is a string formatted as "lat,lon,radius_km" (e.g. "47.6,-122.3,50.0").
+/// When non-empty the agent uses CMD_SEND_CHANNEL_TXT_MSG_CORRIDOR.
+pub const AGENT_CHANNEL_CORRIDOR: Property<Vec<String>, NodeScope> = Property::new(
+    "agent/channel/corridor",
+    "Geo-corridor waypoints for scoped flood delivery (lat,lon,radius_km per entry)",
+    PropertyDefault::Vec(&[]),
+)
+.with_type(PropertyType::new(PropertyBaseType::String).array());
 
 // ============================================================================
 // Metrics Properties (Node scope)

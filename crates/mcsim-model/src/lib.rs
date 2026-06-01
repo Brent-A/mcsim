@@ -33,11 +33,11 @@ pub use properties::{
     AGENT_DIRECT_ENABLED, AGENT_DIRECT_STARTUP_S, AGENT_DIRECT_STARTUP_JITTER_S, AGENT_DIRECT_TARGETS,
     AGENT_DIRECT_INTERVAL_S, AGENT_DIRECT_INTERVAL_JITTER_S, AGENT_DIRECT_ACK_TIMEOUT_S,
     AGENT_DIRECT_SESSION_MESSAGE_COUNT, AGENT_DIRECT_SESSION_INTERVAL_S, AGENT_DIRECT_SESSION_INTERVAL_JITTER_S,
-    AGENT_DIRECT_MESSAGE_COUNT, AGENT_DIRECT_SHUTDOWN_S,
+    AGENT_DIRECT_MESSAGE_COUNT, AGENT_DIRECT_SHUTDOWN_S, AGENT_DIRECT_PATH_WARMUP_COUNT,
     AGENT_CHANNEL_ENABLED, AGENT_CHANNEL_STARTUP_S, AGENT_CHANNEL_STARTUP_JITTER_S, AGENT_CHANNEL_TARGETS,
     AGENT_CHANNEL_INTERVAL_S, AGENT_CHANNEL_INTERVAL_JITTER_S,
     AGENT_CHANNEL_SESSION_MESSAGE_COUNT, AGENT_CHANNEL_SESSION_INTERVAL_S, AGENT_CHANNEL_SESSION_INTERVAL_JITTER_S,
-    AGENT_CHANNEL_MESSAGE_COUNT, AGENT_CHANNEL_SHUTDOWN_S,
+    AGENT_CHANNEL_MESSAGE_COUNT, AGENT_CHANNEL_SHUTDOWN_S, AGENT_CHANNEL_CORRIDOR,
     // CLI properties
     CLI_PASSWORD, CLI_COMMANDS,
     // Agent config types
@@ -46,6 +46,7 @@ pub use properties::{
     LOCATION_LATITUDE, LOCATION_LONGITUDE, LOCATION_ALTITUDE_M,
     SIMULATION_DURATION_S, SIMULATION_SEED, SIMULATION_UART_BASE_PORT,
     FIRMWARE_TYPE, FIRMWARE_UART_PORT, FIRMWARE_STARTUP_TIME_S, FIRMWARE_STARTUP_JITTER_S,
+    FIRMWARE_MAX_RESEND_ATTEMPTS,
     KEYS_PRIVATE_KEY, KEYS_PUBLIC_KEY,
     METRICS_GROUPS, METRICS_WARMUP_S, ROOM_SERVER_ROOM_ID,
     // Firmware simulation properties
@@ -62,6 +63,7 @@ pub use properties::{
 
 use mcsim_common::{EntityId, EntityRegistry, Event, EventPayload, GeoCoord, NodeId, SimTime};
 use mcsim_lora::{LinkModel, RadioParams};
+use meshcore_packet::CorridorTriple;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -662,6 +664,9 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                         encryption_key: None,
                         rng_seed: node_rng_seed,
                     },
+                    node_lat: position.latitude,
+                    node_lon: position.longitude,
+                    max_resend_attempts: resolved.get(&FIRMWARE_MAX_RESEND_ATTEMPTS),
                 };
                 let mut firmware = RepeaterFirmware::with_sim_params(firmware_id, fw_config, radio_id, node.name.clone(), &node_firmware_sim_params)?;
                 
@@ -705,6 +710,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                         encryption_key: None,
                         rng_seed: node_rng_seed,
                     },
+                    max_resend_attempts: resolved.get(&FIRMWARE_MAX_RESEND_ATTEMPTS),
                 };
                 let firmware = CompanionFirmware::with_sim_params(firmware_id, fw_config, radio_id, agent_id, node.name.clone(), &node_firmware_sim_params)?;
                 entities.register(Box::new(firmware));
@@ -754,6 +760,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                         rng_seed: node_rng_seed,
                     },
                     room_id,
+                    max_resend_attempts: resolved.get(&FIRMWARE_MAX_RESEND_ATTEMPTS),
                 };
                 
                 let mut firmware = RoomServerFirmware::with_sim_params(firmware_id, fw_config, radio_id, node.name.clone(), &node_firmware_sim_params)?;
@@ -909,6 +916,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
             session_interval_jitter_s: props.get(&AGENT_DIRECT_SESSION_INTERVAL_JITTER_S),
             message_count: props.get(&AGENT_DIRECT_MESSAGE_COUNT),
             shutdown_s: props.get(&AGENT_DIRECT_SHUTDOWN_S),
+            path_warmup_count: props.get(&AGENT_DIRECT_PATH_WARMUP_COUNT),
         };
 
         // Build channel message config
@@ -949,6 +957,45 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
             session_interval_jitter_s: props.get(&AGENT_CHANNEL_SESSION_INTERVAL_JITTER_S),
             message_count: props.get(&AGENT_CHANNEL_MESSAGE_COUNT),
             shutdown_s: props.get(&AGENT_CHANNEL_SHUTDOWN_S),
+            corridor: {
+                let corridor_strs: Vec<String> = props.get(&AGENT_CHANNEL_CORRIDOR);
+                let mut triples = Vec::with_capacity(corridor_strs.len());
+                for s in &corridor_strs {
+                    let parts: Vec<&str> = s.splitn(3, ',').collect();
+                    if parts.len() != 3 {
+                        return Err(ModelError::InvalidConfig(format!(
+                            "Node '{}': corridor entry '{}' must be formatted as 'lat,lon,radius_km'",
+                            node_config.name, s
+                        )));
+                    }
+                    let lat = parts[0].trim().parse::<f32>().map_err(|_| ModelError::InvalidConfig(
+                        format!("Node '{}': corridor entry '{}': invalid latitude '{}'",
+                            node_config.name, s, parts[0].trim())))?;
+                    let lon = parts[1].trim().parse::<f32>().map_err(|_| ModelError::InvalidConfig(
+                        format!("Node '{}': corridor entry '{}': invalid longitude '{}'",
+                            node_config.name, s, parts[1].trim())))?;
+                    let radius_km = parts[2].trim().parse::<f32>().map_err(|_| ModelError::InvalidConfig(
+                        format!("Node '{}': corridor entry '{}': invalid radius '{}'",
+                            node_config.name, s, parts[2].trim())))?;
+                    let triple = CorridorTriple::from_real_world(lat, lon, radius_km)
+                        .map_err(|e| ModelError::InvalidConfig(
+                            format!("Node '{}': corridor entry '{}': {}", node_config.name, s, e)))?
+                    ;
+                    // Warn if lat/lon were snapped to the encoding raster.
+                    let snap_lat_delta = (triple.lat - lat).abs();
+                    let snap_lon_delta = (triple.lon - lon).abs();
+                    if snap_lat_delta > 1e-4 || snap_lon_delta > 1e-4 {
+                        log::warn!(
+                            "Node '{}': corridor lat/lon ({}, {}) snapped to raster ({}, {}) \
+                             [delta: {:.6}°, {:.6}°]",
+                            node_config.name, lat, lon, triple.lat, triple.lon,
+                            snap_lat_delta, snap_lon_delta
+                        );
+                    }
+                    triples.push(triple);
+                }
+                triples
+            },
         };
 
         let agent_config = mcsim_agents::AgentConfig {

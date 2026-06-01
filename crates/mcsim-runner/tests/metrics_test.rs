@@ -978,3 +978,132 @@ fn test_wildcard_breakdown() {
         }
     }
 }
+
+// ============================================================================
+// Test 9: Geo-Corridor Scoped Flood
+// ============================================================================
+
+/// Verify that corridor-tagged channel messages are only forwarded by repeaters
+/// whose own geographic position lies inside the corridor.
+///
+/// Topology: corridor_l_shape
+///   - L-shaped corridor: west→corner→north, radius 3 km at each waypoint
+///   - Alice at WP1 (west end), Bob at WP3 (north end)
+///   - R_in_H: midpoint of horizontal leg  — INSIDE corridor
+///   - R_in_V: midpoint of vertical leg    — INSIDE corridor
+///   - R_out_SW: far south-west of WP1     — OUTSIDE corridor
+///   - R_out_N: north of horizontal leg    — OUTSIDE corridor
+///
+/// Expected behaviour:
+///   1. Alice sends exactly 1 corridor-tagged channel message (cmd 65).
+///   2. Inside repeaters (R_in_H, R_in_V) each forward the message once.
+///   3. Outside repeaters (R_out_SW, R_out_N) receive the message but drop it
+///      (corridor check → 0 TX for grp_txt).
+///   4. Bob receives the message via the inside-repeater chain.
+#[test]
+fn test_corridor_scoped_flood() {
+    let result = run_and_collect_metrics(
+        "examples/topologies/corridor_l_shape.yaml",
+        Some("examples/behaviors/corridor_broadcast.yaml"),
+        42,    // seed — deterministic
+        "30s", // duration — enough for 1 message + forwarding chain
+        &[
+            "mcsim.radio.tx_packets/node/payload_type",
+            "mcsim.radio.rx_packets/node/payload_type",
+        ],
+    );
+
+    eprintln!("Test 9: Geo-Corridor Scoped Flood");
+
+    // Helper: TX grp_txt count for a named node.
+    let tx_grp = |node: &str| -> u64 {
+        get_counter_for_labels(
+            &result,
+            "mcsim.radio.tx_packets",
+            &[("node", node), ("payload_type", "grp_txt")],
+        )
+        .unwrap_or(0)
+    };
+
+    // Helper: RX grp_txt count for a named node.
+    let rx_grp = |node: &str| -> u64 {
+        get_counter_for_labels(
+            &result,
+            "mcsim.radio.rx_packets",
+            &[("node", node), ("payload_type", "grp_txt")],
+        )
+        .unwrap_or(0)
+    };
+
+    // ── Sender ───────────────────────────────────────────────────────────────
+    let alice_tx = tx_grp("Alice");
+    eprintln!("  Alice TX grp_txt: {}", alice_tx);
+    assert_eq!(alice_tx, 1, "Alice must send exactly 1 corridor channel message");
+
+    // ── Inside repeaters — must forward ──────────────────────────────────────
+    let r_in_h_tx = tx_grp("R_in_H");
+    let r_in_v_tx = tx_grp("R_in_V");
+    eprintln!("  R_in_H  TX grp_txt: {} (inside corridor — expects >=1)", r_in_h_tx);
+    eprintln!("  R_in_V  TX grp_txt: {} (inside corridor — expects >=1)", r_in_v_tx);
+
+    assert!(
+        r_in_h_tx >= 1,
+        "R_in_H (inside horizontal leg, lat=47.61, lon=-122.375) must forward \
+         the corridor message. Got {} TX. \
+         Check: node_lat/node_lon propagation from YAML -> NodeConfig -> prefs, \
+         and isPointInCorridor() logic.",
+        r_in_h_tx
+    );
+    assert!(
+        r_in_v_tx >= 1,
+        "R_in_V (inside vertical leg, lat=47.635, lon=-122.35) must forward \
+         the corridor message. Got {} TX. \
+         Check: node_lat/node_lon propagation and corridor geometry.",
+        r_in_v_tx
+    );
+
+    // ── Outside repeaters — must NOT forward ─────────────────────────────────
+    let r_out_sw_tx = tx_grp("R_out_SW");
+    let r_out_n_tx  = tx_grp("R_out_N");
+    eprintln!("  R_out_SW TX grp_txt: {} (outside corridor — expects 0)", r_out_sw_tx);
+    eprintln!("  R_out_N  TX grp_txt: {} (outside corridor — expects 0)", r_out_n_tx);
+
+    assert_eq!(
+        r_out_sw_tx, 0,
+        "R_out_SW (lat=47.57, lon=-122.43, ~5 km SW of WP1) must NOT forward \
+         the corridor message. Got {} TX. \
+         Check: isPointInCorridor() returns false for this position.",
+        r_out_sw_tx
+    );
+    assert_eq!(
+        r_out_n_tx, 0,
+        "R_out_N (lat=47.645, lon=-122.40, ~3.9 km north of horizontal leg) must NOT forward \
+         the corridor message. Got {} TX. \
+         Check: isPointInCorridor() returns false for this position.",
+        r_out_n_tx
+    );
+
+    // ── Outside repeaters still receive Alice's original packet ──────────────
+    let r_out_sw_rx = rx_grp("R_out_SW");
+    let r_out_n_rx  = rx_grp("R_out_N");
+    eprintln!("  R_out_SW RX grp_txt: {} (should receive but drop)", r_out_sw_rx);
+    eprintln!("  R_out_N  RX grp_txt: {} (should receive but drop)", r_out_n_rx);
+    assert!(
+        r_out_sw_rx >= 1,
+        "R_out_SW must receive Alice's packet (to exercise the corridor-drop code path)"
+    );
+    assert!(
+        r_out_n_rx >= 1,
+        "R_out_N must receive Alice's packet (to exercise the corridor-drop code path)"
+    );
+
+    // ── Receiver — Bob must get the message via inside-repeater chain ─────────
+    let bob_rx = rx_grp("Bob");
+    eprintln!("  Bob RX grp_txt: {} (expects >=1)", bob_rx);
+    assert!(
+        bob_rx >= 1,
+        "Bob (north end of corridor) must receive the message via R_in_H / R_in_V. \
+         Got {} RX. Check inside-repeater forwarding and Bob's radio links.",
+        bob_rx
+    );
+}

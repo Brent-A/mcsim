@@ -192,12 +192,21 @@ pub trait FirmwareEntity: Entity {
 pub struct RepeaterConfig {
     /// Base firmware configuration.
     pub base: FirmwareConfig,
+    /// Node latitude (decimal degrees). 0.0 = unknown (fail-open for corridor checks).
+    pub node_lat: f64,
+    /// Node longitude (decimal degrees). 0.0 = unknown (fail-open for corridor checks).
+    pub node_lon: f64,
+    /// Maximum firmware-level resend attempts per packet (0=disabled, 1-5). Default 2.
+    pub max_resend_attempts: u8,
 }
 
 impl Default for RepeaterConfig {
     fn default() -> Self {
         RepeaterConfig {
             base: FirmwareConfig::default(),
+            node_lat: 0.0,
+            node_lon: 0.0,
+            max_resend_attempts: 2,
         }
     }
 }
@@ -268,6 +277,8 @@ impl RepeaterFirmware {
             .with_initial_time(0, initial_rtc)
             .with_rng_seed(config.base.rng_seed)
             .with_name(&name)
+            .with_location(config.node_lat, config.node_lon)
+            .with_max_resend_attempts(config.max_resend_attempts)
             .with_spin_detection(
                 sim_params.spin_detection_threshold,
                 sim_params.idle_loops_before_yield,
@@ -606,12 +617,15 @@ impl FirmwareEntity for RepeaterFirmware {
 pub struct CompanionConfig {
     /// Base firmware configuration.
     pub base: FirmwareConfig,
+    /// Maximum firmware-level resend attempts per packet (0=disabled, 1-5). Default 2.
+    pub max_resend_attempts: u8,
 }
 
 impl Default for CompanionConfig {
     fn default() -> Self {
         CompanionConfig {
             base: FirmwareConfig::default(),
+            max_resend_attempts: 2,
         }
     }
 }
@@ -681,6 +695,7 @@ impl CompanionFirmware {
             .with_initial_time(0, initial_rtc)
             .with_rng_seed(config.base.rng_seed)
             .with_name(&name)
+            .with_max_resend_attempts(config.max_resend_attempts)
             .with_spin_detection(
                 sim_params.spin_detection_threshold,
                 sim_params.idle_loops_before_yield,
@@ -1021,6 +1036,8 @@ pub struct RoomServerConfig {
     pub base: FirmwareConfig,
     /// Room identifier.
     pub room_id: [u8; 16],
+    /// Maximum firmware-level resend attempts per packet (0=disabled, 1-5). Default 2.
+    pub max_resend_attempts: u8,
 }
 
 impl Default for RoomServerConfig {
@@ -1028,6 +1045,7 @@ impl Default for RoomServerConfig {
         RoomServerConfig {
             base: FirmwareConfig::default(),
             room_id: [0u8; 16],
+            max_resend_attempts: 2,
         }
     }
 }
@@ -1094,6 +1112,7 @@ impl RoomServerFirmware {
             .with_initial_time(0, initial_rtc)
             .with_rng_seed(config.base.rng_seed)
             .with_name(&name)
+            .with_max_resend_attempts(config.max_resend_attempts)
             .with_spin_detection(
                 sim_params.spin_detection_threshold,
                 sim_params.idle_loops_before_yield,

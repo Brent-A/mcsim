@@ -1,0 +1,149 @@
+# Geo-Corridor L-Shape Network
+# Tests corridor-scoped flood delivery with an L-shaped (90°-corner) corridor.
+#
+# Corridor geometry (3 waypoints, radius 3 km each):
+#
+#   WP1 (47.6100, -122.4000)  ←─ Alice (sender)
+#     │ horizontal leg (east)
+#   WP2 (47.6100, -122.3500)  ←─ R_corner
+#     │ vertical leg (north)
+#   WP3 (47.6600, -122.3500)  ←─ Bob (receiver)
+#
+# Nodes inside the corridor (should forward corridor packets):
+#   R_in_H   — midpoint of the horizontal leg
+#   R_in_V   — midpoint of the vertical leg
+#
+# Nodes outside the corridor (must NOT forward corridor packets):
+#   R_out_SW — far south-west of WP1  (≈5 km away)
+#   R_out_N  — north of horizontal leg (≈3.9 km from the leg)
+#
+# Radio topology: Alice and all repeaters can hear each other (explicit edges).
+# Bob only hears R_in_V to verify end-to-end delivery via the in-corridor chain.
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz:  62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+
+nodes:
+  # ── Companions ────────────────────────────────────────────────────────────
+  - name: "Alice"
+    location:
+      lat:  47.6100
+      lon: -122.4000
+    firmware:
+      type: Companion
+    keys:
+      public_key: "AA*"
+
+  - name: "Bob"
+    location:
+      lat:  47.6600
+      lon: -122.3500
+    firmware:
+      type: Companion
+    keys:
+      public_key: "BB*"
+
+  # ── Repeaters inside the corridor ─────────────────────────────────────────
+  - name: "R_in_H"
+    location:
+      lat:  47.6100
+      lon: -122.3750
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "01*"
+
+  - name: "R_in_V"
+    location:
+      lat:  47.6350
+      lon: -122.3500
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "02*"
+
+  # ── Repeaters outside the corridor ────────────────────────────────────────
+  - name: "R_out_SW"
+    location:
+      lat:  47.5700     # ≈5 km SW of WP1 — clearly outside the 3 km radius
+      lon: -122.4300
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "03*"
+
+  - name: "R_out_N"
+    location:
+      lat:  47.6450     # north of the horizontal leg: ≈3.9 km from the leg centre
+      lon: -122.4000
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "04*"
+
+# ── Radio links ──────────────────────────────────────────────────────────────
+# All repeaters hear Alice so every node gets the corridor-tagged packet.
+# Bob only hears R_in_V (the inside vertical-leg repeater) to verify
+# that in-corridor forwarding delivers the message end-to-end.
+edges:
+  # Alice ↔ R_in_H
+  - from: "Alice"
+    to: "R_in_H"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R_in_H"
+    to: "Alice"
+    mean_snr_db_at20dbm: 12.0
+
+  # Alice ↔ R_in_V
+  - from: "Alice"
+    to: "R_in_V"
+    mean_snr_db_at20dbm: 10.0
+  - from: "R_in_V"
+    to: "Alice"
+    mean_snr_db_at20dbm: 10.0
+
+  # Alice ↔ R_out_SW
+  - from: "Alice"
+    to: "R_out_SW"
+    mean_snr_db_at20dbm: 8.0
+  - from: "R_out_SW"
+    to: "Alice"
+    mean_snr_db_at20dbm: 8.0
+
+  # Alice ↔ R_out_N
+  - from: "Alice"
+    to: "R_out_N"
+    mean_snr_db_at20dbm: 8.0
+  - from: "R_out_N"
+    to: "Alice"
+    mean_snr_db_at20dbm: 8.0
+
+  # R_in_H ↔ R_in_V  (inside-corridor hop)
+  - from: "R_in_H"
+    to: "R_in_V"
+    mean_snr_db_at20dbm: 10.0
+  - from: "R_in_V"
+    to: "R_in_H"
+    mean_snr_db_at20dbm: 10.0
+
+  # R_in_V → Bob  (delivery at the north end of the corridor)
+  - from: "R_in_V"
+    to: "Bob"
+    mean_snr_db_at20dbm: 12.0
+  - from: "Bob"
+    to: "R_in_V"
+    mean_snr_db_at20dbm: 12.0
+
+  # Also let R_in_H reach Bob for redundancy (but R_in_V is the primary hop)
+  - from: "R_in_H"
+    to: "Bob"
+    mean_snr_db_at20dbm: 6.0
+  - from: "Bob"
+    to: "R_in_H"
+    mean_snr_db_at20dbm: 6.0

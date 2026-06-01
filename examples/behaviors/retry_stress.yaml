@@ -1,18 +1,24 @@
 # Retry Stress Behavior
 #
-# Alice sends 20 direct messages to Bob.  The 60 s warmup lets route discovery
-# complete before the first message.  The 10 s interval between messages gives
+# Alice sends 20 direct messages to Bob.  The 90 s startup gives the mesh time
+# to form before the first message.  The 10 s interval between messages gives
 # the retry mechanism enough time to attempt all three transmissions and receive
 # the ACK before the next message is due.
 #
-# Designed for use with retry_showcase.yaml (--duration 300s).
+# On the first DM, Alice has no path to Bob and uses FLOOD routing (P≈66%).
+# A successful FLOOD causes Bob to send PATH+ACK, giving Alice the DIRECT route
+# for all subsequent DMs (P≈99.3% each).
 #
-# Retry timing recap (SF7, BW 62.5 kHz, path_len=1):
+# To guarantee path discovery before the counted session, add:
+#   path_warmup_count: 1   # one uncounted probe DM before message_count begins
+#
+# Designed for use with retry_showcase.yaml (--duration 350s).
+#
+# Retry timing recap (SF7, BW 62.5 kHz, 3-hop path):
 #   TX1 airtime:          ~164 ms
-#   Silence + retry delay: 164 + 300 = 464 ms
-#   TX2 fires at:         ~728 ms after TX1 start
-#   TX3 fires at:        ~1456 ms after TX1 start
-#   Total worst-case window: ~2 s  →  10 s interval is ample
+#   Round-trip (FLOOD):    3 hops × 164 ms + 200 ms TXT_ACK_DELAY ≈ 1.5 s
+#   DIRECT per-hop retry:  up to 3 TX/hop (max_resend_attempts=2)
+#   10 s interval is ample for any delivery scenario
 
 nodes:
   - name: "Alice"

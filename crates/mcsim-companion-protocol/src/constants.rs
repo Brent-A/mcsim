@@ -106,6 +106,8 @@ pub const CMD_SET_FLOOD_SCOPE: u8 = 54;
 pub const CMD_SEND_CONTROL_DATA: u8 = 55;
 /// Get statistics (v8+).
 pub const CMD_GET_STATS: u8 = 56;
+/// Send channel text message with geo-corridor (simulator extension).
+pub const CMD_SEND_CHANNEL_TXT_MSG_CORRIDOR: u8 = 65;
 
 // ============================================================================
 // Stats Sub-types (for CMD_GET_STATS)

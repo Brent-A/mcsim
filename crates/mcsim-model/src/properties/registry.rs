@@ -52,6 +52,7 @@ pub const ALL_PROPERTIES: &[&PropertyDef] = &[
     &AGENT_DIRECT_SESSION_INTERVAL_JITTER_S.def,
     &AGENT_DIRECT_MESSAGE_COUNT.def,
     &AGENT_DIRECT_SHUTDOWN_S.def,
+    &AGENT_DIRECT_PATH_WARMUP_COUNT.def,
     // Agent Channel Message
     &AGENT_CHANNEL_ENABLED.def,
     &AGENT_CHANNEL_STARTUP_S.def,
@@ -64,6 +65,7 @@ pub const ALL_PROPERTIES: &[&PropertyDef] = &[
     &AGENT_CHANNEL_SESSION_INTERVAL_JITTER_S.def,
     &AGENT_CHANNEL_MESSAGE_COUNT.def,
     &AGENT_CHANNEL_SHUTDOWN_S.def,
+    &AGENT_CHANNEL_CORRIDOR.def,
     // Link
     &LINK_MEAN_SNR_DB_AT20DBM.def,
     &LINK_SNR_STD_DEV.def,
@@ -84,6 +86,7 @@ pub const ALL_PROPERTIES: &[&PropertyDef] = &[
     &FIRMWARE_UART_PORT.def,
     &FIRMWARE_STARTUP_TIME_S.def,
     &FIRMWARE_STARTUP_JITTER_S.def,
+    &FIRMWARE_MAX_RESEND_ATTEMPTS.def,
     // Metrics (Node scope)
     &METRICS_GROUPS.def,
     // Metrics (Simulation scope)

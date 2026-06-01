@@ -53,10 +53,14 @@
 #   Only Alice's DMs face the three marginal forward hops.
 #
 # Expected delivery statistics per message attempt:
-#   P(DM reaches Bob | 1 TX)  = 0.87³ ≈ 66%
-#   P(DM reaches Bob | 3 TX)  = 1 − (1−0.66)³ ≈ 96%
-#   P(ACK reaches Alice)       ≈ 100%  (reliable return path)
-#   → retry raises effective ACK rate from ~66% to ~96%
+#   FLOOD route (first DM, no path discovered yet):
+#     P(DM reaches Bob via FLOOD | 1 TX) = 0.87³ ≈ 66%
+#     Note: Alice's TX2/TX3 are blocked by R1's hasSeen ring-buffer — no retry benefit.
+#     A successful FLOOD DM causes Bob to reply with PATH+ACK, giving Alice Bob's route.
+#   DIRECT route (subsequent DMs after path discovery, max_resend_attempts=2 → 3 TX/hop):
+#     P(hop fails | 3 TX) = 0.13³ ≈ 0.2%
+#     P(DM reaches Bob via DIRECT | 3 TX/hop) = (1−0.13³)³ ≈ 99.3%
+#   → path_warmup_count=1 in behavior triggers path discovery before counted session
 #
 # Run with:
 #   cargo run -- run examples/topologies/retry_showcase.yaml \

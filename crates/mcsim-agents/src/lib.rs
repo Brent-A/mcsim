@@ -25,6 +25,7 @@ use mcsim_companion_protocol::{
     PublicKeyPrefix, ReceivedChannelMessage, ReceivedContactMessage, Response, TextType,
     ADV_TYPE_CHAT, ADV_TYPE_REPEATER, ADV_TYPE_ROOM_SERVER, MAX_PATH_SIZE,
 };
+use meshcore_packet::CorridorTriple;
 use mcsim_metrics::{metric_defs, MetricLabels};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
@@ -67,6 +68,10 @@ pub struct DirectMessageConfig {
     /// Time before the agent stops sending.
     /// If None, the agent sends indefinitely.
     pub shutdown_s: Option<f64>,
+    /// Number of uncounted path-warmup DMs to send before the main counted session.
+    /// Each warmup DM triggers path discovery (FLOOD → PATH+ACK → Alice learns DIRECT
+    /// route) but is not counted in delivery metrics. 0 = disabled.
+    pub path_warmup_count: u32,
 }
 
 impl Default for DirectMessageConfig {
@@ -84,6 +89,7 @@ impl Default for DirectMessageConfig {
             session_interval_jitter_s: 0.0,
             message_count: None,
             shutdown_s: None,
+            path_warmup_count: 0,
         }
     }
 }
@@ -206,6 +212,9 @@ pub struct ChannelMessageConfig {
     /// Time before the agent stops sending.
     /// If None, the agent sends indefinitely.
     pub shutdown_s: Option<f64>,
+    /// Geo-corridor triples for scoped flood delivery.
+    /// If non-empty, the agent uses CMD_SEND_CHANNEL_TXT_MSG_CORRIDOR.
+    pub corridor: Vec<CorridorTriple>,
 }
 
 impl Default for ChannelMessageConfig {
@@ -223,6 +232,7 @@ impl Default for ChannelMessageConfig {
             session_interval_jitter_s: 0.0,
             message_count: None,
             shutdown_s: None,
+            corridor: Vec::new(),
         }
     }
 }
@@ -293,6 +303,11 @@ pub enum ProtocolState {
 enum DirectMessageState {
     /// Waiting for startup timer.
     WaitingStartup,
+    /// Path warmup: sent a probe DM, waiting for ACK or timeout.
+    /// `remaining` is the number of warmup DMs left including this one.
+    WaitingWarmupAck { remaining: u32 },
+    /// Path warmup: waiting (session_interval_s) before sending the next probe DM.
+    WaitingWarmupInterval { remaining: u32 },
     /// Ready to send (idle).
     Idle,
     /// Waiting for interval timer after ack/timeout.
@@ -338,6 +353,8 @@ const TIMER_CHANNEL_INTERVAL: u64 = 6;
 const TIMER_CHANNEL_SESSION: u64 = 7;
 const TIMER_DIRECT_SHUTDOWN: u64 = 8;
 const TIMER_CHANNEL_SHUTDOWN: u64 = 9;
+/// Separate timer for warmup DM ACK timeouts (avoids stale-timer interference with counted DMs).
+const TIMER_DIRECT_WARMUP_TIMEOUT: u64 = 10;
 
 // ============================================================================
 // Agent Entity
@@ -375,6 +392,12 @@ pub struct Agent {
     direct_messages_sent: u32,
     channel_messages_sent: u32,
     messages_received: u32,
+
+    // ACK hash tracking for metrics correctness
+    // warmup_ack_hashes: hashes of warmup probe DMs (learned from Response::Sent in WaitingWarmupAck)
+    // counted_ack_hashes: hashes of counted DMs that have already been acked (dedup FLOOD retries)
+    warmup_ack_hashes: Vec<u32>,
+    counted_ack_hashes: std::collections::HashSet<u32>,
     
     // Metrics labels for this agent
     metrics_labels: MetricLabels,
@@ -424,6 +447,8 @@ impl Agent {
             direct_messages_sent: 0,
             channel_messages_sent: 0,
             messages_received: 0,
+            warmup_ack_hashes: Vec::new(),
+            counted_ack_hashes: std::collections::HashSet::new(),
             metrics_labels,
         }
     }
@@ -744,18 +769,123 @@ impl Agent {
     }
 
     /// Handle ACK received for direct message.
-    fn handle_direct_ack(&mut self, ctx: &mut SimContext) {
-        if let DirectMessageState::WaitingAck { .. } = self.direct_state {
-            self.schedule_next_direct_or_session(ctx);
+    /// Advance the state machine in response to a SendConfirmed ACK.
+    ///
+    /// The `ack_hash` is compared against the expected hash to guard against
+    /// late warmup ACKs arriving in `WaitingAck` state (which would otherwise
+    /// prematurely advance the counted-DM state machine).
+    fn handle_direct_ack(&mut self, ack_hash: u32, ctx: &mut SimContext) {
+        match self.direct_state {
+            DirectMessageState::WaitingWarmupAck { remaining } => {
+                // Only advance if this ACK is actually for a warmup DM.
+                if self.warmup_ack_hashes.contains(&ack_hash) {
+                    self.advance_warmup_or_start_session(ctx, remaining);
+                }
+            }
+            DirectMessageState::WaitingAck { expected_ack } => {
+                // Only advance if ACK matches the currently-expected counted DM.
+                // A hash of 0 means Response::Sent hasn't arrived yet — ignore.
+                if expected_ack != 0 && expected_ack == ack_hash {
+                    self.schedule_next_direct_or_session(ctx);
+                }
+            }
+            _ => {
+                // Late/stale ACK in a state we've moved past — ignore.
+            }
         }
     }
 
     /// Handle ACK timeout for direct message.
     fn handle_direct_timeout(&mut self, ctx: &mut SimContext) {
-        if let DirectMessageState::WaitingAck { .. } = self.direct_state {
-            debug!("Agent[{}]: Direct message ACK timeout", self.config.name);
-            self.schedule_next_direct_or_session(ctx);
+        match self.direct_state {
+            DirectMessageState::WaitingWarmupAck { remaining } => {
+                debug!("Agent[{}]: Warmup DM ACK timeout ({} remaining)", self.config.name, remaining);
+                self.advance_warmup_or_start_session(ctx, remaining);
+            }
+            DirectMessageState::WaitingAck { .. } => {
+                debug!("Agent[{}]: Direct message ACK timeout", self.config.name);
+                self.schedule_next_direct_or_session(ctx);
+            }
+            _ => {}
         }
+    }
+
+    /// After a warmup DM ACK or timeout: send next warmup DM or start real session.
+    fn advance_warmup_or_start_session(&mut self, ctx: &mut SimContext, remaining: u32) {
+        if remaining > 1 {
+            // More warmup DMs to send — wait session_interval_s then send next probe
+            self.direct_state = DirectMessageState::WaitingWarmupInterval { remaining: remaining - 1 };
+            let delay = self.jittered_delay(
+                ctx.rng(),
+                self.config.direct.session_interval_s,
+                self.config.direct.session_interval_jitter_s,
+            );
+            ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_DIRECT_SESSION });
+        } else {
+            // Warmup complete — start real counted session
+            debug!("Agent[{}]: Path warmup complete, starting counted session", self.config.name);
+            self.direct_state = DirectMessageState::Idle;
+            self.send_next_direct_message(ctx);
+        }
+    }
+
+    /// Send a single path-warmup (probe) DM to the first configured target.
+    /// Does NOT increment `direct_messages_sent` or record delivery metrics.
+    fn send_warmup_dm(&mut self, ctx: &mut SimContext, remaining: u32) {
+        if self.config.direct.targets.is_empty() {
+            warn!("Agent[{}]: No direct message targets for warmup, skipping", self.config.name);
+            self.direct_state = DirectMessageState::Idle;
+            self.send_next_direct_message(ctx);
+            return;
+        }
+
+        // Use the first target (don't advance the rotation index)
+        let target = &self.config.direct.targets[0];
+        let timestamp = ctx.time().as_secs_f64() as u32;
+        let recipient = PublicKeyPrefix::new(target.public_key_hash());
+
+        ctx.tracer().log(TraceEvent::custom(
+            Some(&self.config.name),
+            self.id,
+            ctx.time(),
+            format!(
+                "Sending warmup DM ({}/{}) to recipient_prefix={:?}",
+                self.config.direct.path_warmup_count - remaining + 1,
+                self.config.direct.path_warmup_count,
+                recipient.as_bytes(),
+            ),
+        ));
+
+        debug!(
+            "Agent[{}]: Sending warmup DM {}/{} to {:?}",
+            self.config.name,
+            self.config.direct.path_warmup_count - remaining + 1,
+            self.config.direct.path_warmup_count,
+            recipient.to_hex(),
+        );
+
+        self.send_command(
+            ctx,
+            &Command::SendTextMessage {
+                text_type: TextType::Plain,
+                attempt: 0,
+                timestamp,
+                recipient_prefix: recipient,
+                text: format!(
+                    "Warmup {}/{} from {}",
+                    self.config.direct.path_warmup_count - remaining + 1,
+                    self.config.direct.path_warmup_count,
+                    self.config.name,
+                ),
+            },
+        );
+
+        // Transition to waiting for warmup ACK; use a SEPARATE timer ID so that when the
+        // warmup times out and the counted session starts, a stale warmup timer cannot
+        // accidentally trigger the counted-DM timeout handler.
+        self.direct_state = DirectMessageState::WaitingWarmupAck { remaining };
+        let timeout = SimTime::from_secs(self.config.direct.ack_timeout_s);
+        ctx.post_event(timeout, vec![self.id], EventPayload::Timer { timer_id: TIMER_DIRECT_WARMUP_TIMEOUT });
     }
 
     /// Schedule next direct message or session break.
@@ -831,11 +961,23 @@ impl Agent {
 
         self.send_command(
             ctx,
-            &Command::SendChannelTextMessage {
-                text_type: TextType::Plain,
-                channel_idx,
-                timestamp,
-                text: content,
+            &if self.config.channel.corridor.is_empty() {
+                Command::SendChannelTextMessage {
+                    text_type: TextType::Plain,
+                    channel_idx,
+                    timestamp,
+                    text: content,
+                }
+            } else {
+                Command::SendChannelTextMessageWithCorridor {
+                    text_type: TextType::Plain,
+                    channel_idx,
+                    timestamp,
+                    text: content,
+                    encoded_triples: self.config.channel.corridor.iter()
+                        .map(|t| t.encode())
+                        .collect(),
+                }
             },
         );
 
@@ -919,9 +1061,16 @@ impl Agent {
                     "Agent[{}]: Message sent, ack_hash=0x{:08x}",
                     self.config.name, expected_ack
                 );
-                // Update expected ack for direct messages
-                if let DirectMessageState::WaitingAck { .. } = self.direct_state {
-                    self.direct_state = DirectMessageState::WaitingAck { expected_ack };
+                match self.direct_state {
+                    DirectMessageState::WaitingAck { .. } => {
+                        // Update expected ack for counted DMs
+                        self.direct_state = DirectMessageState::WaitingAck { expected_ack };
+                    }
+                    DirectMessageState::WaitingWarmupAck { .. } => {
+                        // Track warmup DM hash so late ACKs can be filtered out of metrics
+                        self.warmup_ack_hashes.push(expected_ack);
+                    }
+                    _ => {}
                 }
             }
             Response::ContactMessageV2(msg) | Response::ContactMessageV3(msg) => {
@@ -986,23 +1135,26 @@ impl Agent {
             msg.text
         );
 
-        // Record metric for message received
-        mcsim_metrics::metrics::counter!(
-            metric_defs::MESSAGE_DELIVERED.name,
-            &self.metrics_labels.to_labels()
-        ).increment(1);
+        // Skip delivery metrics for warmup probe DMs (text starts with "Warmup ").
+        // Warmup DMs are path-discovery probes sent before the counted session; they
+        // should not inflate mcsim.dm.delivered or mcsim.dm.delivery_latency.
+        if !msg.text.starts_with("Warmup ") {
+            mcsim_metrics::metrics::counter!(
+                metric_defs::MESSAGE_DELIVERED.name,
+                &self.metrics_labels.to_labels()
+            ).increment(1);
 
-        // Record delivery latency based on message timestamp
-        // The timestamp is the send time in seconds (truncated to u32)
-        let receive_time_secs = ctx.time().as_secs_f64();
-        let send_time_secs = msg.timestamp as f64;
-        let latency_ms = (receive_time_secs - send_time_secs) * 1000.0;
-        
-        // Record latency (should always be non-negative in normal operation)
-        mcsim_metrics::metrics::histogram!(
-            metric_defs::MESSAGE_DELIVERY_LATENCY.name,
-            &self.metrics_labels.to_labels()
-        ).record(latency_ms);
+            // Record delivery latency based on message timestamp.
+            // The timestamp is the send time in seconds (truncated to u32).
+            let receive_time_secs = ctx.time().as_secs_f64();
+            let send_time_secs = msg.timestamp as f64;
+            let latency_ms = (receive_time_secs - send_time_secs) * 1000.0;
+
+            mcsim_metrics::metrics::histogram!(
+                metric_defs::MESSAGE_DELIVERY_LATENCY.name,
+                &self.metrics_labels.to_labels()
+            ).record(latency_ms);
+        }
     }
 
     /// Handle a received channel message.
@@ -1032,20 +1184,28 @@ impl Agent {
                     self.config.name, ack_hash, trip_time_ms
                 );
 
-                // Record metric for message acknowledged
-                mcsim_metrics::metrics::counter!(
-                    metric_defs::MESSAGE_ACKED.name,
-                    &self.metrics_labels.to_labels()
-                ).increment(1);
+                // Record metrics only for counted DMs (not warmup probes).
+                // - warmup_ack_hashes: set of hashes for warmup probe DMs (tracked via Response::Sent)
+                // - counted_ack_hashes: deduplicates FLOOD's multiple ACKs for the same counted DM
+                let is_warmup = self.warmup_ack_hashes.contains(&ack_hash);
+                if !is_warmup {
+                    let is_new = self.counted_ack_hashes.insert(ack_hash);
+                    if is_new {
+                        // First ACK for this counted DM — record metrics
+                        mcsim_metrics::metrics::counter!(
+                            metric_defs::MESSAGE_ACKED.name,
+                            &self.metrics_labels.to_labels()
+                        ).increment(1);
 
-                // Record ACK latency histogram
-                mcsim_metrics::metrics::histogram!(
-                    metric_defs::MESSAGE_ACK_LATENCY.name,
-                    &self.metrics_labels.to_labels()
-                ).record(trip_time_ms as f64);
+                        mcsim_metrics::metrics::histogram!(
+                            metric_defs::MESSAGE_ACK_LATENCY.name,
+                            &self.metrics_labels.to_labels()
+                        ).record(trip_time_ms as f64);
+                    }
+                }
 
-                // Handle direct message ACK
-                self.handle_direct_ack(ctx);
+                // Advance state machine only if this ACK is for the currently-expected DM.
+                self.handle_direct_ack(ack_hash, ctx);
             }
             PushNotification::MessageWaiting => {
                 // A message is waiting - send SyncNextMessage to retrieve it
@@ -1089,8 +1249,13 @@ impl Entity for Agent {
                     TIMER_DIRECT_STARTUP => {
                         // Direct messaging startup complete
                         if self.protocol_state == ProtocolState::Ready {
-                            self.direct_state = DirectMessageState::Idle;
-                            self.send_next_direct_message(ctx);
+                            let warmup = self.config.direct.path_warmup_count;
+                            if warmup > 0 {
+                                self.send_warmup_dm(ctx, warmup);
+                            } else {
+                                self.direct_state = DirectMessageState::Idle;
+                                self.send_next_direct_message(ctx);
+                            }
                         }
                     }
                     TIMER_DIRECT_INTERVAL => {
@@ -1103,16 +1268,30 @@ impl Entity for Agent {
                         }
                     }
                     TIMER_DIRECT_ACK_TIMEOUT => {
-                        // ACK timeout for direct message
-                        self.handle_direct_timeout(ctx);
+                        // ACK timeout for counted direct messages — guard against stale timers.
+                        if matches!(self.direct_state, DirectMessageState::WaitingAck { .. }) {
+                            self.handle_direct_timeout(ctx);
+                        }
+                    }
+                    TIMER_DIRECT_WARMUP_TIMEOUT => {
+                        // ACK timeout for warmup probe DMs — guard against stale timers.
+                        if matches!(self.direct_state, DirectMessageState::WaitingWarmupAck { .. }) {
+                            self.handle_direct_timeout(ctx);
+                        }
                     }
                     TIMER_DIRECT_SESSION => {
-                        // Direct message session break complete
-                        if self.protocol_state == ProtocolState::Ready 
-                            && self.direct_state == DirectMessageState::WaitingSession 
-                        {
-                            self.direct_state = DirectMessageState::Idle;
-                            self.send_next_direct_message(ctx);
+                        // Direct message session break complete — also used for warmup intervals
+                        if self.protocol_state == ProtocolState::Ready {
+                            match self.direct_state {
+                                DirectMessageState::WaitingWarmupInterval { remaining } => {
+                                    self.send_warmup_dm(ctx, remaining);
+                                }
+                                DirectMessageState::WaitingSession => {
+                                    self.direct_state = DirectMessageState::Idle;
+                                    self.send_next_direct_message(ctx);
+                                }
+                                _ => {}
+                            }
                         }
                     }
                     TIMER_CHANNEL_STARTUP => {
