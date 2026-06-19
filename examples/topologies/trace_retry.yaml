@@ -29,9 +29,10 @@
 #     R3 → R2:     10 dB ±2σ  →  ~100%
 #     Bob → R3:    10 dB ±2σ  →  ~100%
 #
-# With max_resend_attempts=2 each hop tries 3 TX.  Per-hop failure probability
-# drops to 0.13^3 ≈ 0.2%, end-to-end delivery probability is roughly
-# (1 - 0.13^3)^3 ≈ 99.3%.
+# With max_resend_attempts=2 each intermediate hop tries up to 3 TX. The last hop
+# (R3 → Bob) does NOT retry: the destination does not forward the TRACE, so a
+# retry could never be cancelled by overhearing a downstream forward. This avoids
+# flooding the destination; the sender must retry the entire TRACE if needed.
 #
 # Run with:
 #   cargo run -- run examples/topologies/trace_retry.yaml \

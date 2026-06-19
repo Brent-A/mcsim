@@ -19,10 +19,9 @@
 # Link qualities (SF7, BW 62.5 kHz, threshold -7.5 dB):
 #   All links: 15 dB ±0σ  →  100% deterministic delivery
 #
-# Even with ideal links, TRACE still shows multiple receptions at Bob because
-# the destination does not forward the TRACE, so the last hop (R3) cannot
-# overhear a downstream forward to cancel its retries.  With
-# max_resend_attempts=2, R3 therefore sends up to 3 copies of each TRACE.
+# With ideal links Bob receives exactly one copy of each TRACE: intermediate
+# hops forward once, and the last hop (R3 → Bob) does not retry because the
+# destination does not forward the TRACE and therefore cannot cancel a retry.
 #
 # Run with:
 #   cargo run -- run examples/topologies/trace_retry_goodlinks.yaml \
