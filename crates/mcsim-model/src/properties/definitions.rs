@@ -400,6 +400,105 @@ pub const AGENT_DIRECT_PATH_WARMUP_COUNT: Property<u32, NodeScope> = Property::n
 );
 
 // ============================================================================
+// Agent TRACE Properties (Node scope)
+// ============================================================================
+
+/// Enable sending TRACE path packets.
+pub const AGENT_TRACE_ENABLED: Property<bool, NodeScope> = Property::new(
+    "agent/trace/enabled",
+    "Enable sending TRACE path packets",
+    PropertyDefault::Bool(false),
+);
+
+/// Wait time before starting TRACE sends.
+pub const AGENT_TRACE_STARTUP_S: Property<f64, NodeScope> = Property::new(
+    "agent/trace/startup_s",
+    "Wait time before starting TRACE sends",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+/// Standard deviation in the randomness of the TRACE startup interval.
+pub const AGENT_TRACE_STARTUP_JITTER_S: Property<f64, NodeScope> = Property::new(
+    "agent/trace/startup_jitter_s",
+    "Standard deviation in the randomness of the TRACE startup interval",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+/// Names of nodes forming the TRACE path. The destination is the last node in the list.
+/// Each hop is resolved to a public-key prefix based on flags.
+pub const AGENT_TRACE_TARGETS: Property<Vec<String>, NodeScope> = Property::new(
+    "agent/trace/targets",
+    "Names of nodes forming the TRACE path. Destination is the last node. Each hop is resolved to a public-key prefix",
+    PropertyDefault::Vec(&[]),
+)
+.with_type(PropertyType::new(PropertyBaseType::String).array());
+
+/// Interval after receiving a TraceData push (or timeout) before sending the next TRACE.
+pub const AGENT_TRACE_INTERVAL_S: Property<f64, NodeScope> = Property::new(
+    "agent/trace/interval_s",
+    "Interval after receiving a TraceData push (or timeout) before sending the next TRACE",
+    PropertyDefault::Float(5.0),
+)
+.with_unit("s");
+
+/// Standard deviation of the randomness in the TRACE interval timer.
+pub const AGENT_TRACE_INTERVAL_JITTER_S: Property<f64, NodeScope> = Property::new(
+    "agent/trace/interval_jitter_s",
+    "Standard deviation of the randomness in the TRACE interval timer",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+/// Timeout waiting for a TraceData push before proceeding.
+pub const AGENT_TRACE_RESPONSE_TIMEOUT_S: Property<f64, NodeScope> = Property::new(
+    "agent/trace/response_timeout_s",
+    "Timeout waiting for a TraceData push before proceeding",
+    PropertyDefault::Float(10.0),
+)
+.with_unit("s");
+
+/// Total count of TRACE packets before the agent stops sending.
+pub const AGENT_TRACE_MESSAGE_COUNT: Property<Option<u32>, NodeScope> = Property::new(
+    "agent/trace/message_count",
+    "Total count of TRACE packets before the agent stops sending. If null, sends indefinitely",
+    PropertyDefault::Null,
+)
+.with_type(PropertyType::new(PropertyBaseType::Integer).nullable());
+
+/// Time before the agent stops sending TRACE packets.
+pub const AGENT_TRACE_SHUTDOWN_S: Property<Option<f64>, NodeScope> = Property::new(
+    "agent/trace/shutdown_s",
+    "Time before the agent stops sending TRACE packets. If null, sends indefinitely",
+    PropertyDefault::Null,
+)
+.with_type(PropertyType::new(PropertyBaseType::Float).nullable())
+.with_unit("s");
+
+/// TRACE tag base value (echoed in TraceData).
+pub const AGENT_TRACE_TAG: Property<u32, NodeScope> = Property::new(
+    "agent/trace/tag",
+    "TRACE tag base value. The actual tag sent is tag + trace_index",
+    PropertyDefault::Integer(0),
+);
+
+/// TRACE auth code base value (echoed in TraceData).
+pub const AGENT_TRACE_AUTH: Property<u32, NodeScope> = Property::new(
+    "agent/trace/auth",
+    "TRACE auth code base value. The actual auth sent is auth + trace_index",
+    PropertyDefault::Integer(0),
+);
+
+/// TRACE flags. Lower 2 bits select path hash size:
+///   0 = 1 byte/hash (default), 1 = 2 bytes/hash, 2 = 4 bytes/hash, 3 = 8 bytes/hash.
+pub const AGENT_TRACE_FLAGS: Property<u8, NodeScope> = Property::new(
+    "agent/trace/flags",
+    "TRACE flags. Lower 2 bits select path hash size: 0=1B/hash, 1=2B/hash, 2=4B/hash, 3=8B/hash",
+    PropertyDefault::Integer(0),
+);
+
+// ============================================================================
 // Agent Channel Message Properties (Node scope)
 // ============================================================================
 

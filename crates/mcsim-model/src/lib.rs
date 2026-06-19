@@ -34,6 +34,9 @@ pub use properties::{
     AGENT_DIRECT_INTERVAL_S, AGENT_DIRECT_INTERVAL_JITTER_S, AGENT_DIRECT_ACK_TIMEOUT_S,
     AGENT_DIRECT_SESSION_MESSAGE_COUNT, AGENT_DIRECT_SESSION_INTERVAL_S, AGENT_DIRECT_SESSION_INTERVAL_JITTER_S,
     AGENT_DIRECT_MESSAGE_COUNT, AGENT_DIRECT_SHUTDOWN_S, AGENT_DIRECT_PATH_WARMUP_COUNT,
+    AGENT_TRACE_ENABLED, AGENT_TRACE_STARTUP_S, AGENT_TRACE_STARTUP_JITTER_S, AGENT_TRACE_TARGETS,
+    AGENT_TRACE_INTERVAL_S, AGENT_TRACE_INTERVAL_JITTER_S, AGENT_TRACE_RESPONSE_TIMEOUT_S,
+    AGENT_TRACE_MESSAGE_COUNT, AGENT_TRACE_SHUTDOWN_S, AGENT_TRACE_TAG, AGENT_TRACE_AUTH, AGENT_TRACE_FLAGS,
     AGENT_CHANNEL_ENABLED, AGENT_CHANNEL_STARTUP_S, AGENT_CHANNEL_STARTUP_JITTER_S, AGENT_CHANNEL_TARGETS,
     AGENT_CHANNEL_INTERVAL_S, AGENT_CHANNEL_INTERVAL_JITTER_S,
     AGENT_CHANNEL_SESSION_MESSAGE_COUNT, AGENT_CHANNEL_SESSION_INTERVAL_S, AGENT_CHANNEL_SESSION_INTERVAL_JITTER_S,
@@ -41,7 +44,7 @@ pub use properties::{
     // CLI properties
     CLI_PASSWORD, CLI_COMMANDS,
     // Agent config types
-    AgentConfig, DirectMessageConfig, ChannelMessageConfig,
+    AgentConfig, DirectMessageConfig, ChannelMessageConfig, TraceMessageConfig,
     LINK_MEAN_SNR_DB_AT20DBM, LINK_SNR_STD_DEV, LINK_RSSI_DBM,
     LOCATION_LATITUDE, LOCATION_LONGITUDE, LOCATION_ALTITUDE_M,
     SIMULATION_DURATION_S, SIMULATION_SEED, SIMULATION_UART_BASE_PORT,
@@ -814,7 +817,8 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         let props = node_config.properties();
         let direct_enabled: bool = props.get(&AGENT_DIRECT_ENABLED);
         let channel_enabled: bool = props.get(&AGENT_CHANNEL_ENABLED);
-        
+        let trace_enabled: bool = props.get(&AGENT_TRACE_ENABLED);
+
         let firmware_id = *node_name_to_firmware_id.get(&node_config.name).unwrap();
         let node_id = *node_name_to_node_id.get(&node_config.name).unwrap();
 
@@ -998,10 +1002,52 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
             },
         };
 
+        // Build TRACE config
+        // agent/trace/targets is a list of node names. Resolve each to a NodeId and
+        // append the first N bytes of its public key to the path, where N is determined
+        // by flags & 0x03: 0->1, 1->2, 2->4, 3->8 bytes per hop.
+        let trace_target_names: Vec<String> = props.get(&AGENT_TRACE_TARGETS);
+        let trace_flags: u8 = props.get(&AGENT_TRACE_FLAGS);
+        let hash_size = 1usize << (trace_flags & 0x03);
+        let mut trace_path: Vec<u8> = Vec::new();
+        for name in &trace_target_names {
+            if let Some(target_id) = node_name_to_node_id.get(name) {
+                if hash_size <= target_id.0.len() {
+                    trace_path.extend_from_slice(&target_id.0[..hash_size]);
+                } else {
+                    return Err(ModelError::InvalidConfig(format!(
+                        "Node '{}': TRACE hash_size {} exceeds public key length for target '{}'",
+                        node_config.name, hash_size, name
+                    )));
+                }
+            } else {
+                return Err(ModelError::InvalidConfig(format!(
+                    "Node '{}': TRACE target '{}' not found",
+                    node_config.name, name
+                )));
+            }
+        }
+
+        let trace_config = mcsim_agents::TraceConfig {
+            enabled: trace_enabled,
+            startup_s: props.get(&AGENT_TRACE_STARTUP_S),
+            startup_jitter_s: props.get(&AGENT_TRACE_STARTUP_JITTER_S),
+            path: trace_path,
+            interval_s: props.get(&AGENT_TRACE_INTERVAL_S),
+            interval_jitter_s: props.get(&AGENT_TRACE_INTERVAL_JITTER_S),
+            response_timeout_s: props.get(&AGENT_TRACE_RESPONSE_TIMEOUT_S),
+            message_count: props.get(&AGENT_TRACE_MESSAGE_COUNT),
+            shutdown_s: props.get(&AGENT_TRACE_SHUTDOWN_S),
+            tag: props.get(&AGENT_TRACE_TAG),
+            auth: props.get(&AGENT_TRACE_AUTH),
+            flags: trace_flags,
+        };
+
         let agent_config = mcsim_agents::AgentConfig {
             name: node_config.name.clone(),
             direct: direct_config,
             channel: channel_config,
+            trace: trace_config,
             contacts,
         };
 

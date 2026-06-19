@@ -75,6 +75,8 @@ defaults:
       spreading_factor: 7
       coding_rate: 5
       tx_power_dbm: 20
+    firmware:
+      max_resend_attempts: 3  # Default firmware-level retries (0=disabled, 1-5, default 2)      
 
 nodes:
   # ── Active communication path ────────────────────────────────────────────

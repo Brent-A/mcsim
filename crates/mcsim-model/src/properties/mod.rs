@@ -87,6 +87,19 @@ pub use definitions::{
     AGENT_DIRECT_MESSAGE_COUNT,
     AGENT_DIRECT_SHUTDOWN_S,
     AGENT_DIRECT_PATH_WARMUP_COUNT,
+    // Agent TRACE
+    AGENT_TRACE_ENABLED,
+    AGENT_TRACE_STARTUP_S,
+    AGENT_TRACE_STARTUP_JITTER_S,
+    AGENT_TRACE_TARGETS,
+    AGENT_TRACE_INTERVAL_S,
+    AGENT_TRACE_INTERVAL_JITTER_S,
+    AGENT_TRACE_RESPONSE_TIMEOUT_S,
+    AGENT_TRACE_MESSAGE_COUNT,
+    AGENT_TRACE_SHUTDOWN_S,
+    AGENT_TRACE_TAG,
+    AGENT_TRACE_AUTH,
+    AGENT_TRACE_FLAGS,
     // Agent Channel Message
     AGENT_CHANNEL_ENABLED,
     AGENT_CHANNEL_STARTUP_S,
@@ -206,4 +219,4 @@ pub use registry::{
 };
 
 // Re-export agent types
-pub use agent::{AgentConfig, DirectMessageConfig, ChannelMessageConfig};
+pub use agent::{AgentConfig, DirectMessageConfig, ChannelMessageConfig, TraceMessageConfig};

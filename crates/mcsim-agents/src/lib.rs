@@ -237,6 +237,58 @@ impl Default for ChannelMessageConfig {
     }
 }
 
+/// Configuration for TRACE path sending behavior.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceConfig {
+    /// Whether TRACE sending is enabled.
+    pub enabled: bool,
+    /// Wait time before starting TRACE sends.
+    pub startup_s: f64,
+    /// Standard deviation in the randomness of the startup interval.
+    pub startup_jitter_s: f64,
+    /// Resolved path bytes (sequence of per-hop hash prefixes).
+    /// The destination is the final hash in the path.
+    pub path: Vec<u8>,
+    /// Interval after receiving a TraceData response (or timeout) before sending the next trace.
+    pub interval_s: f64,
+    /// Standard deviation of the randomness in the interval timer.
+    pub interval_jitter_s: f64,
+    /// Timeout waiting for a TraceData push before proceeding.
+    pub response_timeout_s: f64,
+    /// Count of traces before the agent stops sending.
+    /// If None, the agent sends indefinitely.
+    pub message_count: Option<u32>,
+    /// Time before the agent stops sending.
+    /// If None, the agent sends indefinitely.
+    pub shutdown_s: Option<f64>,
+    /// TRACE tag (arbitrary identifier, echoed in TraceData).
+    pub tag: u32,
+    /// TRACE auth code (arbitrary identifier, echoed in TraceData).
+    pub auth: u32,
+    /// TRACE flags. Lower 2 bits select path hash size:
+    ///   0 = 1 byte/hash, 1 = 2 bytes/hash, 2 = 4 bytes/hash, 3 = 8 bytes/hash.
+    pub flags: u8,
+}
+
+impl Default for TraceConfig {
+    fn default() -> Self {
+        TraceConfig {
+            enabled: false,
+            startup_s: 0.0,
+            startup_jitter_s: 0.0,
+            path: Vec::new(),
+            interval_s: 5.0,
+            interval_jitter_s: 0.0,
+            response_timeout_s: 10.0,
+            message_count: None,
+            shutdown_s: None,
+            tag: 0,
+            auth: 0,
+            flags: 0,
+        }
+    }
+}
+
 /// Unified agent configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
@@ -246,6 +298,8 @@ pub struct AgentConfig {
     pub direct: DirectMessageConfig,
     /// Channel message configuration.
     pub channel: ChannelMessageConfig,
+    /// TRACE path configuration.
+    pub trace: TraceConfig,
     /// Contacts to add to firmware's contact list at startup.
     /// Required for DM communication - firmware needs contacts to decrypt/ACK messages.
     pub contacts: Vec<ContactTarget>,
@@ -257,6 +311,7 @@ impl Default for AgentConfig {
             name: "Agent".to_string(),
             direct: DirectMessageConfig::default(),
             channel: ChannelMessageConfig::default(),
+            trace: TraceConfig::default(),
             contacts: Vec::new(),
         }
     }
@@ -265,7 +320,7 @@ impl Default for AgentConfig {
 impl AgentConfig {
     /// Check if this agent has any messaging behavior enabled.
     pub fn is_enabled(&self) -> bool {
-        self.direct.enabled || self.channel.enabled
+        self.direct.enabled || self.channel.enabled || self.trace.enabled
     }
 }
 
@@ -339,6 +394,23 @@ enum ChannelMessageState {
     Disabled,
 }
 
+/// State for the TRACE path sending state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TraceState {
+    /// Waiting for startup timer.
+    WaitingStartup,
+    /// Ready to send (idle).
+    Idle,
+    /// TRACE sent, waiting for TraceData push response.
+    WaitingResponse,
+    /// Waiting for interval timer after response/timeout.
+    WaitingInterval,
+    /// Permanently shut down (message_count or shutdown_s reached).
+    Shutdown,
+    /// Disabled.
+    Disabled,
+}
+
 // ============================================================================
 // Timer IDs
 // ============================================================================
@@ -355,6 +427,10 @@ const TIMER_DIRECT_SHUTDOWN: u64 = 8;
 const TIMER_CHANNEL_SHUTDOWN: u64 = 9;
 /// Separate timer for warmup DM ACK timeouts (avoids stale-timer interference with counted DMs).
 const TIMER_DIRECT_WARMUP_TIMEOUT: u64 = 10;
+const TIMER_TRACE_STARTUP: u64 = 11;
+const TIMER_TRACE_INTERVAL: u64 = 12;
+const TIMER_TRACE_RESPONSE_TIMEOUT: u64 = 13;
+const TIMER_TRACE_SHUTDOWN: u64 = 14;
 
 // ============================================================================
 // Agent Entity
@@ -386,11 +462,15 @@ pub struct Agent {
     channel_state: ChannelMessageState,
     channel_target_idx: usize,
     channel_session_count: u32,
-    
+
+    // TRACE state
+    trace_state: TraceState,
+
     // Message counters
     message_seq: u32,
     direct_messages_sent: u32,
     channel_messages_sent: u32,
+    trace_messages_sent: u32,
     messages_received: u32,
 
     // ACK hash tracking for metrics correctness
@@ -427,7 +507,13 @@ impl Agent {
         } else {
             ChannelMessageState::Disabled
         };
-        
+
+        let trace_state = if config.trace.enabled {
+            TraceState::WaitingStartup
+        } else {
+            TraceState::Disabled
+        };
+
         Agent {
             id,
             config,
@@ -443,9 +529,11 @@ impl Agent {
             channel_state,
             channel_target_idx: 0,
             channel_session_count: 0,
+            trace_state,
             message_seq: 0,
             direct_messages_sent: 0,
             channel_messages_sent: 0,
+            trace_messages_sent: 0,
             messages_received: 0,
             warmup_ack_hashes: Vec::new(),
             counted_ack_hashes: std::collections::HashSet::new(),
@@ -467,7 +555,12 @@ impl Agent {
     pub fn channel_messages_sent(&self) -> u32 {
         self.channel_messages_sent
     }
-    
+
+    /// Get the total TRACE packets sent.
+    pub fn trace_messages_sent(&self) -> u32 {
+        self.trace_messages_sent
+    }
+
     /// Get the total messages received.
     pub fn messages_received(&self) -> u32 {
         self.messages_received
@@ -672,11 +765,27 @@ impl Agent {
                 self.config.channel.startup_jitter_s,
             );
             ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_CHANNEL_STARTUP });
-            
+
             // Schedule shutdown timer if configured
             if let Some(shutdown_s) = self.config.channel.shutdown_s {
                 let shutdown_delay = SimTime::from_secs(shutdown_s);
                 ctx.post_event(shutdown_delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_CHANNEL_SHUTDOWN });
+            }
+        }
+
+        // Start TRACE state machine
+        if self.trace_state == TraceState::WaitingStartup {
+            let delay = self.jittered_delay(
+                ctx.rng(),
+                self.config.trace.startup_s,
+                self.config.trace.startup_jitter_s,
+            );
+            ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_TRACE_STARTUP });
+
+            // Schedule shutdown timer if configured
+            if let Some(shutdown_s) = self.config.trace.shutdown_s {
+                let shutdown_delay = SimTime::from_secs(shutdown_s);
+                ctx.post_event(shutdown_delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_TRACE_SHUTDOWN });
             }
         }
     }
@@ -1016,6 +1125,143 @@ impl Agent {
     }
 
     // ========================================================================
+    // TRACE State Machine
+    // ========================================================================
+
+    /// Send the next TRACE path packet.
+    fn send_next_trace(&mut self, ctx: &mut SimContext) {
+        // Check if we've hit the message count limit
+        if let Some(limit) = self.config.trace.message_count {
+            if self.trace_messages_sent >= limit {
+                debug!("Agent[{}]: TRACE message count limit reached ({})", self.config.name, limit);
+                self.trace_state = TraceState::Shutdown;
+                return;
+            }
+        }
+
+        if self.config.trace.path.is_empty() {
+            warn!("Agent[{}]: No TRACE path configured", self.config.name);
+            self.trace_state = TraceState::Disabled;
+            return;
+        }
+
+        // Increment tag/auth per trace so responses can be matched.
+        // The base values come from config; we add the sent-counter for uniqueness.
+        let tag = self.config.trace.tag.wrapping_add(self.trace_messages_sent);
+        let auth = self.config.trace.auth.wrapping_add(self.trace_messages_sent);
+
+        ctx.tracer().log(TraceEvent::custom(
+            Some(&self.config.name),
+            self.id,
+            ctx.time(),
+            format!(
+                "Sending TRACE tag={:08x} auth={:08x} flags={} path_len={} path={:02x?}",
+                tag, auth, self.config.trace.flags,
+                self.config.trace.path.len(),
+                self.config.trace.path
+            ),
+        ));
+
+        debug!(
+            "Agent[{}]: Sending TRACE tag={:08x} auth={:08x} path_len={}",
+            self.config.name, tag, auth, self.config.trace.path.len()
+        );
+
+        self.send_command(
+            ctx,
+            &Command::SendTracePath {
+                tag,
+                auth,
+                flags: self.config.trace.flags,
+                path: self.config.trace.path.clone(),
+            },
+        );
+
+        self.trace_messages_sent += 1;
+        self.trace_state = TraceState::WaitingResponse;
+
+        let timeout = SimTime::from_secs(self.config.trace.response_timeout_s);
+        ctx.post_event(timeout, vec![self.id], EventPayload::Timer { timer_id: TIMER_TRACE_RESPONSE_TIMEOUT });
+    }
+
+    /// Handle a TraceData push notification.
+    fn handle_trace_data(
+        &mut self,
+        tag: u32,
+        auth_code: u32,
+        flags: u8,
+        path_hashes: &[u8],
+        path_snrs: &[u8],
+        final_snr_x4: i8,
+        ctx: &mut SimContext,
+    ) {
+        // Decode SNRs (scaled by 4) for each hop.
+        let snrs_db: Vec<f32> = path_snrs.iter()
+            .map(|s| *s as f32 / 4.0)
+            .collect();
+        let final_snr_db = final_snr_x4 as f32 / 4.0;
+
+        ctx.tracer().log(TraceEvent::custom(
+            Some(&self.config.name),
+            self.id,
+            ctx.time(),
+            format!(
+                "TraceData received tag={:08x} auth={:08x} flags={} path_len={} path_hashes={:02x?} per_hop_snrs={:.1?} final_snr={:.1}",
+                tag, auth_code, flags, path_hashes.len(), path_hashes, snrs_db, final_snr_db
+            ),
+        ));
+
+        // Only advance our own sender state machine for responses matching the
+        // currently outstanding trace. We sent with tag/auth derived from
+        // config + (trace_messages_sent - 1).
+        let expected_tag = self.config.trace.tag.wrapping_add(self.trace_messages_sent.saturating_sub(1));
+        let expected_auth = self.config.trace.auth.wrapping_add(self.trace_messages_sent.saturating_sub(1));
+
+        if tag == expected_tag && auth_code == expected_auth {
+            debug!(
+                "Agent[{}]: TraceData matches outstanding trace, advancing state machine",
+                self.config.name
+            );
+            if self.trace_state == TraceState::WaitingResponse {
+                self.schedule_next_trace(ctx);
+            }
+        } else {
+            trace!(
+                "Agent[{}]: TraceData tag/auth mismatch (got {:08x}/{:08x}, expected {:08x}/{:08x})",
+                self.config.name, tag, auth_code, expected_tag, expected_auth
+            );
+        }
+    }
+
+    /// Handle TRACE response timeout.
+    fn handle_trace_timeout(&mut self, ctx: &mut SimContext) {
+        if self.trace_state == TraceState::WaitingResponse {
+            debug!("Agent[{}]: TRACE response timeout", self.config.name);
+            ctx.tracer().log(TraceEvent::custom(
+                Some(&self.config.name),
+                self.id,
+                ctx.time(),
+                format!(
+                    "TRACE response timeout after {} sent",
+                    self.trace_messages_sent
+                ),
+            ));
+            self.schedule_next_trace(ctx);
+        }
+    }
+
+    /// Schedule the next TRACE send.
+    fn schedule_next_trace(&mut self, ctx: &mut SimContext) {
+        self.trace_state = TraceState::WaitingInterval;
+        let delay = self.jittered_delay(
+            ctx.rng(),
+            self.config.trace.interval_s,
+            self.config.trace.interval_jitter_s,
+        );
+        ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_TRACE_INTERVAL });
+    }
+
+    // ========================================================================
     // Message Handling
     // ========================================================================
 
@@ -1224,6 +1470,25 @@ impl Agent {
                     public_key.to_hex()
                 );
             }
+            PushNotification::TraceData {
+                path_len: _,
+                flags,
+                tag,
+                auth_code,
+                path_hashes,
+                path_snrs,
+                final_snr_x4,
+            } => {
+                self.handle_trace_data(
+                    tag,
+                    auth_code,
+                    flags,
+                    &path_hashes,
+                    &path_snrs,
+                    final_snr_x4,
+                    ctx,
+                );
+            }
             _ => {
                 trace!("Agent[{}]: Unhandled push: {:?}", self.config.name, push);
             }
@@ -1335,6 +1600,37 @@ impl Entity for Agent {
                         {
                             debug!("Agent[{}]: Channel message shutdown timer reached", self.config.name);
                             self.channel_state = ChannelMessageState::Shutdown;
+                        }
+                    }
+                    TIMER_TRACE_STARTUP => {
+                        // TRACE startup complete
+                        if self.protocol_state == ProtocolState::Ready {
+                            self.trace_state = TraceState::Idle;
+                            self.send_next_trace(ctx);
+                        }
+                    }
+                    TIMER_TRACE_INTERVAL => {
+                        // Time to send next TRACE
+                        if self.protocol_state == ProtocolState::Ready
+                            && self.trace_state == TraceState::WaitingInterval
+                        {
+                            self.trace_state = TraceState::Idle;
+                            self.send_next_trace(ctx);
+                        }
+                    }
+                    TIMER_TRACE_RESPONSE_TIMEOUT => {
+                        // Response timeout for TRACE
+                        if self.trace_state == TraceState::WaitingResponse {
+                            self.handle_trace_timeout(ctx);
+                        }
+                    }
+                    TIMER_TRACE_SHUTDOWN => {
+                        // TRACE shutdown timer fired
+                        if self.trace_state != TraceState::Disabled
+                            && self.trace_state != TraceState::Shutdown
+                        {
+                            debug!("Agent[{}]: TRACE shutdown timer reached", self.config.name);
+                            self.trace_state = TraceState::Shutdown;
                         }
                     }
                     _ => {}
