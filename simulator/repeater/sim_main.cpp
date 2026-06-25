@@ -101,7 +101,12 @@ struct RepeaterSimNode : public SimNodeImpl {
             prefs->node_lon = config.node_lon;
 
             // Override firmware-level resend attempts from simulation config.
+            // Only when the firmware actually exposes this field (feature-detected
+            // by build.rs → SIM_FW_HAS_MAX_RESEND_ATTEMPTS), so mcsim builds against
+            // firmware branches that lack it.
+#ifdef SIM_FW_HAS_MAX_RESEND_ATTEMPTS
             prefs->max_resend_attempts = config.max_resend_attempts < 6 ? config.max_resend_attempts : 2;
+#endif
         }
         
         // Reset command buffer

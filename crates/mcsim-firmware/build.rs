@@ -376,8 +376,27 @@ fn build_firmware_dll(
     ];
     let include_refs: Vec<&Path> = includes.iter().map(|p| p.as_path()).collect();
 
+    // Feature-detect whether the firmware exposes NodePrefs::max_resend_attempts
+    // (a pr-2670 feature). The sim shims (sim_main.cpp) only assign it when the
+    // SIM_FW_HAS_MAX_RESEND_ATTEMPTS macro is defined, so mcsim builds against
+    // firmware branches that lack the field (e.g. dev / bugfix/login-msg-timer).
+    let meshcore_dir = meshcore_src.parent().unwrap();
+    let fw_has_max_resend = [
+        meshcore_src.join("helpers").join("CommonCLI.h"),
+        meshcore_dir
+            .join("examples")
+            .join("companion_radio")
+            .join("NodePrefs.h"),
+    ]
+    .iter()
+    .any(|p| {
+        fs::read_to_string(p)
+            .map(|s| s.contains("max_resend_attempts"))
+            .unwrap_or(false)
+    });
+
     // Preprocessor definitions
-    let defines: Vec<(&str, Option<&str>)> = vec![
+    let mut defines: Vec<(&str, Option<&str>)> = vec![
         ("SIM_BUILD", Some("1")),
         ("ARDUINO", Some("100")),
         ("SIM_PLATFORM", Some("1")),
@@ -386,7 +405,15 @@ fn build_firmware_dll(
         ("_CRT_SECURE_NO_WARNINGS", None),
         ("WIN32", None),
         ("_WINDOWS", None),
+        // Enable firmware DEBUG prints in the simulator. ARDUINO is defined above,
+        // so the firmware's existing `#if MESH_DEBUG && ARDUINO` path turns debug on
+        // for any branch — no firmware-side `|| defined(MESHCORE_SIMULATOR)` edit
+        // required.
+        ("MESH_DEBUG", Some("1")),
     ];
+    if fw_has_max_resend {
+        defines.push(("SIM_FW_HAS_MAX_RESEND_ATTEMPTS", Some("1")));
+    }
 
     let mut objects: Vec<PathBuf> = Vec::new();
 
