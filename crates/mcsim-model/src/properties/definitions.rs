@@ -400,6 +400,89 @@ pub const AGENT_DIRECT_PATH_WARMUP_COUNT: Property<u32, NodeScope> = Property::n
 );
 
 // ============================================================================
+// Agent Login Properties (Node scope)
+// ============================================================================
+
+/// Enable logging in to repeater / room-server nodes.
+pub const AGENT_LOGIN_ENABLED: Property<bool, NodeScope> = Property::new(
+    "agent/login/enabled",
+    "Enable logging in to repeater / room-server nodes",
+    PropertyDefault::Bool(false),
+);
+
+/// Wait time before starting logins.
+pub const AGENT_LOGIN_STARTUP_S: Property<f64, NodeScope> = Property::new(
+    "agent/login/startup_s",
+    "Wait time before starting logins",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+/// Standard deviation in the randomness of the login startup interval.
+pub const AGENT_LOGIN_STARTUP_JITTER_S: Property<f64, NodeScope> = Property::new(
+    "agent/login/startup_jitter_s",
+    "Standard deviation in the randomness of the login startup interval",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+/// Names of server nodes (repeater / room-server) to log in to. If null, all repeater/room-server nodes are targeted.
+pub const AGENT_LOGIN_TARGETS: Property<Option<Vec<String>>, NodeScope> = Property::new(
+    "agent/login/targets",
+    "Names of server nodes (repeater / room-server) to log in to. If null, all repeater/room-server nodes are targeted",
+    PropertyDefault::Null,
+)
+.with_type(PropertyType::new(PropertyBaseType::String).array().nullable())
+.with_unit("node_name");
+
+/// Password sent with the login (empty string = no password).
+pub const AGENT_LOGIN_PASSWORD: Property<String, NodeScope> = Property::new(
+    "agent/login/password",
+    "Password sent with the login (empty string = no password)",
+    PropertyDefault::String(""),
+);
+
+/// Timeout waiting for a LoginSuccess/LoginFail push before treating the login as failed.
+pub const AGENT_LOGIN_RESPONSE_TIMEOUT_S: Property<f64, NodeScope> = Property::new(
+    "agent/login/response_timeout_s",
+    "Timeout waiting for a LoginSuccess/LoginFail push before treating the login as failed",
+    PropertyDefault::Float(10.0),
+)
+.with_unit("s");
+
+/// Interval between finishing one target and starting the next (and before a retry).
+pub const AGENT_LOGIN_INTERVAL_S: Property<f64, NodeScope> = Property::new(
+    "agent/login/interval_s",
+    "Interval between finishing one target and starting the next (and before a retry)",
+    PropertyDefault::Float(5.0),
+)
+.with_unit("s");
+
+/// Standard deviation of the randomness in the login interval timer.
+pub const AGENT_LOGIN_INTERVAL_JITTER_S: Property<f64, NodeScope> = Property::new(
+    "agent/login/interval_jitter_s",
+    "Standard deviation of the randomness in the login interval timer",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+/// Max login attempts per target before giving up (1 = no retry).
+pub const AGENT_LOGIN_MAX_ATTEMPTS: Property<u32, NodeScope> = Property::new(
+    "agent/login/max_attempts",
+    "Max login attempts per target before giving up (1 = no retry)",
+    PropertyDefault::Integer(1),
+);
+
+/// If set, repeat the whole login cycle after this many seconds (reconnect simulation).
+pub const AGENT_LOGIN_REPEAT_LOGIN_S: Property<Option<f64>, NodeScope> = Property::new(
+    "agent/login/repeat_login_s",
+    "If set, repeat the whole login cycle after this many seconds (reconnect simulation)",
+    PropertyDefault::Null,
+)
+.with_type(PropertyType::new(PropertyBaseType::Float).nullable())
+.with_unit("s");
+
+// ============================================================================
 // Agent TRACE Properties (Node scope)
 // ============================================================================
 

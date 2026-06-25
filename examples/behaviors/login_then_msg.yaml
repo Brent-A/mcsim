@@ -1,0 +1,24 @@
+# Login-then-Message Behavior
+#
+# The Companion logs into the Repeater and the Room-Server, then repeats the login
+# cycle (reconnect simulation). Reproduces the app-driven companion login that fails
+# against pr-2670 servers.
+#
+# Run:
+#   cargo run -- run examples/topologies/login_repro.yaml examples/behaviors/login_then_msg.yaml \
+#       --duration 120s --seed 42 --output trace.json --trace "Companion,Repeater,RoomServer"
+
+nodes:
+  - name: "Companion"
+    agent:
+      login:
+        enabled: true
+        startup_s: 2
+        targets:
+          - "Repeater"
+          - "RoomServer"
+        password: ""
+        response_timeout_s: 10
+        interval_s: 3
+        max_attempts: 3
+        repeat_login_s: 30

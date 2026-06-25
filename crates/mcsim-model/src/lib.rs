@@ -37,6 +37,9 @@ pub use properties::{
     AGENT_TRACE_ENABLED, AGENT_TRACE_STARTUP_S, AGENT_TRACE_STARTUP_JITTER_S, AGENT_TRACE_TARGETS,
     AGENT_TRACE_INTERVAL_S, AGENT_TRACE_INTERVAL_JITTER_S, AGENT_TRACE_RESPONSE_TIMEOUT_S,
     AGENT_TRACE_MESSAGE_COUNT, AGENT_TRACE_SHUTDOWN_S, AGENT_TRACE_TAG, AGENT_TRACE_AUTH, AGENT_TRACE_FLAGS,
+    AGENT_LOGIN_ENABLED, AGENT_LOGIN_STARTUP_S, AGENT_LOGIN_STARTUP_JITTER_S, AGENT_LOGIN_TARGETS,
+    AGENT_LOGIN_PASSWORD, AGENT_LOGIN_RESPONSE_TIMEOUT_S, AGENT_LOGIN_INTERVAL_S,
+    AGENT_LOGIN_INTERVAL_JITTER_S, AGENT_LOGIN_MAX_ATTEMPTS, AGENT_LOGIN_REPEAT_LOGIN_S,
     AGENT_CHANNEL_ENABLED, AGENT_CHANNEL_STARTUP_S, AGENT_CHANNEL_STARTUP_JITTER_S, AGENT_CHANNEL_TARGETS,
     AGENT_CHANNEL_INTERVAL_S, AGENT_CHANNEL_INTERVAL_JITTER_S,
     AGENT_CHANNEL_SESSION_MESSAGE_COUNT, AGENT_CHANNEL_SESSION_INTERVAL_S, AGENT_CHANNEL_SESSION_INTERVAL_JITTER_S,
@@ -818,6 +821,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         let direct_enabled: bool = props.get(&AGENT_DIRECT_ENABLED);
         let channel_enabled: bool = props.get(&AGENT_CHANNEL_ENABLED);
         let trace_enabled: bool = props.get(&AGENT_TRACE_ENABLED);
+        let login_enabled: bool = props.get(&AGENT_LOGIN_ENABLED);
 
         let firmware_id = *node_name_to_firmware_id.get(&node_config.name).unwrap();
         let node_id = *node_name_to_node_id.get(&node_config.name).unwrap();
@@ -921,6 +925,33 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
             message_count: props.get(&AGENT_DIRECT_MESSAGE_COUNT),
             shutdown_s: props.get(&AGENT_DIRECT_SHUTDOWN_S),
             path_warmup_count: props.get(&AGENT_DIRECT_PATH_WARMUP_COUNT),
+        };
+
+        // Build login config
+        // agent/login/targets - server nodes to log in to.
+        // If null, auto-derive all repeater / room-server nodes in the topology.
+        let login_target_names: Option<Vec<String>> = props.get(&AGENT_LOGIN_TARGETS);
+        let login_target_ids: Vec<NodeId> = match login_target_names {
+            Some(names) => names.iter()
+                .filter_map(|name| node_name_to_node_id.get(name).copied())
+                .collect(),
+            None => node_name_to_firmware_type.iter()
+                .filter(|(_, t)| **t == "repeater" || **t == "room_server")
+                .filter_map(|(name, _)| node_name_to_node_id.get(name).copied())
+                .collect(),
+        };
+
+        let login_config = mcsim_agents::LoginConfig {
+            enabled: login_enabled,
+            startup_s: props.get(&AGENT_LOGIN_STARTUP_S),
+            startup_jitter_s: props.get(&AGENT_LOGIN_STARTUP_JITTER_S),
+            targets: login_target_ids,
+            password: props.get(&AGENT_LOGIN_PASSWORD),
+            response_timeout_s: props.get(&AGENT_LOGIN_RESPONSE_TIMEOUT_S),
+            interval_s: props.get(&AGENT_LOGIN_INTERVAL_S),
+            interval_jitter_s: props.get(&AGENT_LOGIN_INTERVAL_JITTER_S),
+            max_attempts: props.get(&AGENT_LOGIN_MAX_ATTEMPTS),
+            repeat_login_s: props.get(&AGENT_LOGIN_REPEAT_LOGIN_S),
         };
 
         // Build channel message config
@@ -1048,6 +1079,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
             direct: direct_config,
             channel: channel_config,
             trace: trace_config,
+            login: login_config,
             contacts,
         };
 

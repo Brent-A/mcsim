@@ -289,6 +289,48 @@ impl Default for TraceConfig {
     }
 }
 
+/// Configuration for server login behavior (login to repeaters / room servers).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginConfig {
+    /// Whether login behavior is enabled.
+    pub enabled: bool,
+    /// Wait time before starting logins.
+    pub startup_s: f64,
+    /// Standard deviation in the randomness of the startup interval.
+    pub startup_jitter_s: f64,
+    /// Server node IDs (public keys) to log in to.
+    pub targets: Vec<NodeId>,
+    /// Password to send (empty string = no password).
+    pub password: String,
+    /// Timeout waiting for a LoginSuccess/LoginFail push before treating as failure.
+    pub response_timeout_s: f64,
+    /// Interval between finishing one target and starting the next (and before a retry).
+    pub interval_s: f64,
+    /// Standard deviation of the randomness in the interval timer.
+    pub interval_jitter_s: f64,
+    /// Max login attempts per target before giving up (1 = no retry).
+    pub max_attempts: u32,
+    /// If Some, repeat the whole login cycle after this many seconds (reconnect simulation).
+    pub repeat_login_s: Option<f64>,
+}
+
+impl Default for LoginConfig {
+    fn default() -> Self {
+        LoginConfig {
+            enabled: false,
+            startup_s: 0.0,
+            startup_jitter_s: 0.0,
+            targets: Vec::new(),
+            password: String::new(),
+            response_timeout_s: 10.0,
+            interval_s: 5.0,
+            interval_jitter_s: 0.0,
+            max_attempts: 1,
+            repeat_login_s: None,
+        }
+    }
+}
+
 /// Unified agent configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
@@ -300,6 +342,8 @@ pub struct AgentConfig {
     pub channel: ChannelMessageConfig,
     /// TRACE path configuration.
     pub trace: TraceConfig,
+    /// Server login configuration.
+    pub login: LoginConfig,
     /// Contacts to add to firmware's contact list at startup.
     /// Required for DM communication - firmware needs contacts to decrypt/ACK messages.
     pub contacts: Vec<ContactTarget>,
@@ -312,6 +356,7 @@ impl Default for AgentConfig {
             direct: DirectMessageConfig::default(),
             channel: ChannelMessageConfig::default(),
             trace: TraceConfig::default(),
+            login: LoginConfig::default(),
             contacts: Vec::new(),
         }
     }
@@ -320,7 +365,7 @@ impl Default for AgentConfig {
 impl AgentConfig {
     /// Check if this agent has any messaging behavior enabled.
     pub fn is_enabled(&self) -> bool {
-        self.direct.enabled || self.channel.enabled || self.trace.enabled
+        self.direct.enabled || self.channel.enabled || self.trace.enabled || self.login.enabled
     }
 }
 
@@ -431,6 +476,28 @@ const TIMER_TRACE_STARTUP: u64 = 11;
 const TIMER_TRACE_INTERVAL: u64 = 12;
 const TIMER_TRACE_RESPONSE_TIMEOUT: u64 = 13;
 const TIMER_TRACE_SHUTDOWN: u64 = 14;
+const TIMER_LOGIN_STARTUP: u64 = 15;
+const TIMER_LOGIN_RESPONSE_TIMEOUT: u64 = 16;
+const TIMER_LOGIN_INTERVAL: u64 = 17;
+
+/// State for the server-login state machine (login to repeaters / room servers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoginState {
+    /// Waiting for startup timer.
+    WaitingStartup,
+    /// Ready to log in to the next target.
+    Idle,
+    /// Login sent, waiting for LoginSuccess/LoginFail push (or timeout).
+    WaitingResponse,
+    /// Waiting for interval timer (between targets / before a retry).
+    WaitingInterval,
+    /// Waiting for repeat_login_s before re-logging-in to all targets.
+    WaitingRepeat,
+    /// Permanently shut down.
+    Shutdown,
+    /// Disabled.
+    Disabled,
+}
 
 // ============================================================================
 // Agent Entity
@@ -465,6 +532,13 @@ pub struct Agent {
 
     // TRACE state
     trace_state: TraceState,
+
+    // Login state
+    login_state: LoginState,
+    login_target_idx: usize,
+    login_attempt: u32,
+    logins_succeeded: u32,
+    logins_failed: u32,
 
     // Message counters
     message_seq: u32,
@@ -514,6 +588,12 @@ impl Agent {
             TraceState::Disabled
         };
 
+        let login_state = if config.login.enabled {
+            LoginState::WaitingStartup
+        } else {
+            LoginState::Disabled
+        };
+
         Agent {
             id,
             config,
@@ -530,6 +610,11 @@ impl Agent {
             channel_target_idx: 0,
             channel_session_count: 0,
             trace_state,
+            login_state,
+            login_target_idx: 0,
+            login_attempt: 0,
+            logins_succeeded: 0,
+            logins_failed: 0,
             message_seq: 0,
             direct_messages_sent: 0,
             channel_messages_sent: 0,
@@ -787,6 +872,16 @@ impl Agent {
                 let shutdown_delay = SimTime::from_secs(shutdown_s);
                 ctx.post_event(shutdown_delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_TRACE_SHUTDOWN });
             }
+        }
+
+        // Start login state machine
+        if self.login_state == LoginState::WaitingStartup {
+            let delay = self.jittered_delay(
+                ctx.rng(),
+                self.config.login.startup_s,
+                self.config.login.startup_jitter_s,
+            );
+            ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_LOGIN_STARTUP });
         }
     }
 
@@ -1266,6 +1361,107 @@ impl Agent {
     // ========================================================================
 
     /// Handle a received protocol message.
+    // ========================================================================
+    // Login State Machine
+    // ========================================================================
+
+    /// Send a login request to the current target.
+    fn send_next_login(&mut self, ctx: &mut SimContext) {
+        if self.config.login.targets.is_empty() {
+            warn!("Agent[{}]: No login targets configured", self.config.name);
+            self.login_state = LoginState::Disabled;
+            return;
+        }
+        if self.login_target_idx >= self.config.login.targets.len() {
+            self.login_state = LoginState::Shutdown;
+            return;
+        }
+
+        self.login_attempt += 1;
+        let target = self.config.login.targets[self.login_target_idx];
+        let public_key = PublicKey(target.0);
+
+        ctx.tracer().log(TraceEvent::custom(
+            Some(&self.config.name),
+            self.id,
+            ctx.time(),
+            format!(
+                "Sending login to server (target #{}, attempt {}/{})",
+                self.login_target_idx, self.login_attempt, self.config.login.max_attempts
+            ),
+        ));
+        debug!(
+            "Agent[{}]: Sending login to {:?}",
+            self.config.name, &target.0[..8]
+        );
+
+        self.send_command(
+            ctx,
+            &Command::SendLogin {
+                public_key,
+                password: self.config.login.password.clone(),
+            },
+        );
+
+        self.login_state = LoginState::WaitingResponse;
+        let timeout = SimTime::from_secs(self.config.login.response_timeout_s);
+        ctx.post_event(
+            timeout,
+            vec![self.id],
+            EventPayload::Timer { timer_id: TIMER_LOGIN_RESPONSE_TIMEOUT },
+        );
+    }
+
+    /// Advance to the next login target, repeat the cycle, or shut down.
+    fn advance_login(&mut self, ctx: &mut SimContext) {
+        self.login_attempt = 0;
+        self.login_target_idx += 1;
+        if self.login_target_idx < self.config.login.targets.len() {
+            self.login_state = LoginState::WaitingInterval;
+            let delay = self.jittered_delay(
+                ctx.rng(),
+                self.config.login.interval_s,
+                self.config.login.interval_jitter_s,
+            );
+            ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_LOGIN_INTERVAL });
+        } else if let Some(repeat_s) = self.config.login.repeat_login_s {
+            self.login_target_idx = 0;
+            self.login_state = LoginState::WaitingRepeat;
+            ctx.post_event(
+                SimTime::from_secs(repeat_s),
+                vec![self.id],
+                EventPayload::Timer { timer_id: TIMER_LOGIN_INTERVAL },
+            );
+        } else {
+            self.login_state = LoginState::Shutdown;
+        }
+    }
+
+    /// Handle a failed or timed-out login: retry the same target or advance.
+    fn handle_login_failure(&mut self, ctx: &mut SimContext, reason: &str) {
+        ctx.tracer().log(TraceEvent::custom(
+            Some(&self.config.name),
+            self.id,
+            ctx.time(),
+            format!(
+                "Login {} (target #{}, attempt {}/{})",
+                reason, self.login_target_idx, self.login_attempt, self.config.login.max_attempts
+            ),
+        ));
+        if self.login_attempt < self.config.login.max_attempts {
+            self.login_state = LoginState::WaitingInterval;
+            let delay = self.jittered_delay(
+                ctx.rng(),
+                self.config.login.interval_s,
+                self.config.login.interval_jitter_s,
+            );
+            ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_LOGIN_INTERVAL });
+        } else {
+            self.logins_failed += 1;
+            self.advance_login(ctx);
+        }
+    }
+
     fn handle_message(&mut self, msg: Message, ctx: &mut SimContext) {
         match msg {
             Message::Response(resp) => self.handle_response(resp, ctx),
@@ -1489,6 +1685,23 @@ impl Agent {
                     ctx,
                 );
             }
+            PushNotification::LoginSuccess { server_prefix, .. } => {
+                self.logins_succeeded += 1;
+                ctx.tracer().log(TraceEvent::custom(
+                    Some(&self.config.name),
+                    self.id,
+                    ctx.time(),
+                    format!("Login SUCCESS from server {:?}", server_prefix.as_bytes()),
+                ));
+                if self.login_state == LoginState::WaitingResponse {
+                    self.advance_login(ctx);
+                }
+            }
+            PushNotification::LoginFail { server_prefix: _ } => {
+                if self.login_state == LoginState::WaitingResponse {
+                    self.handle_login_failure(ctx, "FAIL");
+                }
+            }
             _ => {
                 trace!("Agent[{}]: Unhandled push: {:?}", self.config.name, push);
             }
@@ -1631,6 +1844,29 @@ impl Entity for Agent {
                         {
                             debug!("Agent[{}]: TRACE shutdown timer reached", self.config.name);
                             self.trace_state = TraceState::Shutdown;
+                        }
+                    }
+                    TIMER_LOGIN_STARTUP => {
+                        // Login startup complete
+                        if self.protocol_state == ProtocolState::Ready {
+                            self.login_state = LoginState::Idle;
+                            self.send_next_login(ctx);
+                        }
+                    }
+                    TIMER_LOGIN_RESPONSE_TIMEOUT => {
+                        // No LoginSuccess/LoginFail push in time
+                        if self.login_state == LoginState::WaitingResponse {
+                            self.handle_login_failure(ctx, "TIMEOUT");
+                        }
+                    }
+                    TIMER_LOGIN_INTERVAL => {
+                        // Next target / retry / repeat cycle
+                        if self.protocol_state == ProtocolState::Ready
+                            && (self.login_state == LoginState::WaitingInterval
+                                || self.login_state == LoginState::WaitingRepeat)
+                        {
+                            self.login_state = LoginState::Idle;
+                            self.send_next_login(ctx);
                         }
                     }
                     _ => {}
