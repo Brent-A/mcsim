@@ -77,6 +77,8 @@ pub const ALL_PROPERTIES: &[&PropertyDef] = &[
     &AGENT_LOGIN_INTERVAL_JITTER_S.def,
     &AGENT_LOGIN_MAX_ATTEMPTS.def,
     &AGENT_LOGIN_REPEAT_LOGIN_S.def,
+    // Agent Clock Divergence
+    &AGENT_APP_CLOCK_OFFSET_S.def,
     // Agent Channel Message
     &AGENT_CHANNEL_ENABLED.def,
     &AGENT_CHANNEL_STARTUP_S.def,

@@ -347,6 +347,10 @@ pub struct AgentConfig {
     /// Contacts to add to firmware's contact list at startup.
     /// Required for DM communication - firmware needs contacts to decrypt/ACK messages.
     pub contacts: Vec<ContactTarget>,
+    /// Offset (seconds) added to the *message* (plain/channel) timestamp the agent puts on
+    /// outgoing packets, modelling a Companion whose app clock diverges from its node RTC.
+    /// Login/CLI timestamps stay on the RTC and are unaffected. Positive = app clock ahead.
+    pub app_clock_offset_secs: f64,
 }
 
 impl Default for AgentConfig {
@@ -358,6 +362,7 @@ impl Default for AgentConfig {
             trace: TraceConfig::default(),
             login: LoginConfig::default(),
             contacts: Vec::new(),
+            app_clock_offset_secs: 0.0,
         }
     }
 }
@@ -928,7 +933,9 @@ impl Agent {
         // Generate message content
         self.message_seq += 1;
         let content = format!("DM {} from {}", self.direct_messages_sent + 1, self.config.name);
-        let timestamp = ctx.time().as_secs_f64() as u32;
+        // App-clock divergence hook: message timestamps carry the (divergent) app clock,
+        // while login/CLI timestamps stay on the firmware RTC. Positive offset = app clock ahead.
+        let timestamp = (ctx.time().as_secs_f64() + self.config.app_clock_offset_secs) as u32;
         let recipient = PublicKeyPrefix::new(target.public_key_hash());
 
         ctx.tracer().log(TraceEvent::custom(
@@ -1045,7 +1052,9 @@ impl Agent {
 
         // Use the first target (don't advance the rotation index)
         let target = &self.config.direct.targets[0];
-        let timestamp = ctx.time().as_secs_f64() as u32;
+        // App-clock divergence hook: message timestamps carry the (divergent) app clock,
+        // while login/CLI timestamps stay on the firmware RTC. Positive offset = app clock ahead.
+        let timestamp = (ctx.time().as_secs_f64() + self.config.app_clock_offset_secs) as u32;
         let recipient = PublicKeyPrefix::new(target.public_key_hash());
 
         ctx.tracer().log(TraceEvent::custom(
@@ -1148,7 +1157,9 @@ impl Agent {
         // Generate message content
         self.message_seq += 1;
         let content = format!("CH {} from {}", self.channel_messages_sent + 1, self.config.name);
-        let timestamp = ctx.time().as_secs_f64() as u32;
+        // App-clock divergence hook: message timestamps carry the (divergent) app clock,
+        // while login/CLI timestamps stay on the firmware RTC. Positive offset = app clock ahead.
+        let timestamp = (ctx.time().as_secs_f64() + self.config.app_clock_offset_secs) as u32;
 
         debug!(
             "Agent[{}]: Sending to channel {}: {}",

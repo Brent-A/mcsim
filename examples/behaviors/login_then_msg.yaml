@@ -1,19 +1,36 @@
 # Login-then-Message Behavior
 #
-# The Companion logs into the Repeater and the Room-Server, then repeats the login
-# cycle (reconnect simulation). Reproduces the app-driven companion login that fails
-# against pr-2670 servers.
+# The Companion first sends a burst of direct messages to a server (raising that
+# node's last_timestamp watermark via the *message/app* clock), then logs into the
+# Repeater and the Room-Server, and repeats the login cycle. Pairs with the
+# `agent/app_clock_offset_secs` divergence hook to test whether a divergent app
+# clock (messages far ahead of the node RTC) makes a subsequent login get
+# rejected as a stale/replayed packet — the original login-msg-timer bug (#1551).
 #
-# Run:
-#   cargo run -- run examples/topologies/login_repro.yaml examples/behaviors/login_then_msg.yaml \
+# This file is the offset=0 baseline. For the divergence case, also pass
+# login_then_msg_offset.yaml (later files override earlier ones):
+#
+#   cargo run -- run examples/topologies/login_repro.yaml \
+#       examples/behaviors/login_then_msg.yaml \
+#       [examples/behaviors/login_then_msg_offset.yaml] \
 #       --duration 120s --seed 42 --output trace.json --trace "Companion,Repeater,RoomServer"
 
 nodes:
   - name: "Companion"
     agent:
+      # Direct messages: stamp the app clock onto outgoing packets before login.
+      direct:
+        enabled: true
+        startup_s: 1
+        message_count: 8
+        session_message_count: 1
+        session_interval_s: 3
+        targets:
+          - "RoomServer"
+      # Server login (RTC clock) — starts after the first direct messages.
       login:
         enabled: true
-        startup_s: 2
+        startup_s: 10
         targets:
           - "Repeater"
           - "RoomServer"

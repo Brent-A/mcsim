@@ -483,6 +483,20 @@ pub const AGENT_LOGIN_REPEAT_LOGIN_S: Property<Option<f64>, NodeScope> = Propert
 .with_unit("s");
 
 // ============================================================================
+// Agent Clock-Divergence Properties (Node scope)
+// ============================================================================
+
+/// Seconds added to the app-clock (message) timestamp on outgoing plain/channel packets,
+/// modelling a Companion whose app clock diverges from its node RTC. Login/CLI timestamps
+/// stay on the RTC and are unaffected. Positive = app clock ahead.
+pub const AGENT_APP_CLOCK_OFFSET_S: Property<f64, NodeScope> = Property::new(
+    "agent/app_clock_offset_secs",
+    "Seconds added to the app-clock (message) timestamp on outgoing plain/channel packets, modelling a Companion whose app clock diverges from its node RTC. Login/CLI timestamps stay on the RTC. Positive = app clock ahead",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+// ============================================================================
 // Agent TRACE Properties (Node scope)
 // ============================================================================
 

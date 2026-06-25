@@ -40,6 +40,7 @@ pub use properties::{
     AGENT_LOGIN_ENABLED, AGENT_LOGIN_STARTUP_S, AGENT_LOGIN_STARTUP_JITTER_S, AGENT_LOGIN_TARGETS,
     AGENT_LOGIN_PASSWORD, AGENT_LOGIN_RESPONSE_TIMEOUT_S, AGENT_LOGIN_INTERVAL_S,
     AGENT_LOGIN_INTERVAL_JITTER_S, AGENT_LOGIN_MAX_ATTEMPTS, AGENT_LOGIN_REPEAT_LOGIN_S,
+    AGENT_APP_CLOCK_OFFSET_S,
     AGENT_CHANNEL_ENABLED, AGENT_CHANNEL_STARTUP_S, AGENT_CHANNEL_STARTUP_JITTER_S, AGENT_CHANNEL_TARGETS,
     AGENT_CHANNEL_INTERVAL_S, AGENT_CHANNEL_INTERVAL_JITTER_S,
     AGENT_CHANNEL_SESSION_MESSAGE_COUNT, AGENT_CHANNEL_SESSION_INTERVAL_S, AGENT_CHANNEL_SESSION_INTERVAL_JITTER_S,
@@ -822,6 +823,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         let channel_enabled: bool = props.get(&AGENT_CHANNEL_ENABLED);
         let trace_enabled: bool = props.get(&AGENT_TRACE_ENABLED);
         let login_enabled: bool = props.get(&AGENT_LOGIN_ENABLED);
+        let app_clock_offset_secs: f64 = props.get(&AGENT_APP_CLOCK_OFFSET_S);
 
         let firmware_id = *node_name_to_firmware_id.get(&node_config.name).unwrap();
         let node_id = *node_name_to_node_id.get(&node_config.name).unwrap();
@@ -1081,6 +1083,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
             trace: trace_config,
             login: login_config,
             contacts,
+            app_clock_offset_secs,
         };
 
         let agent = mcsim_agents::Agent::new(agent_id, agent_config, node_id, firmware_id);

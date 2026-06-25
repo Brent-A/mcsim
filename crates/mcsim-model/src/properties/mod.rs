@@ -111,6 +111,8 @@ pub use definitions::{
     AGENT_LOGIN_INTERVAL_JITTER_S,
     AGENT_LOGIN_MAX_ATTEMPTS,
     AGENT_LOGIN_REPEAT_LOGIN_S,
+    // Agent Clock Divergence
+    AGENT_APP_CLOCK_OFFSET_S,
     // Agent Channel Message
     AGENT_CHANNEL_ENABLED,
     AGENT_CHANNEL_STARTUP_S,
