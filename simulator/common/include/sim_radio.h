@@ -54,7 +54,10 @@ public:
     int getNoiseFloor() const override;
 
     // Hardware-specific stubs (no-op in simulation)
-    void setRxBoostedGainMode(bool enabled) { rx_boosted_gain_ = enabled; }
+    // Returns bool to match the firmware's radio wrapper API (RadioLibWrappers.h),
+    // so example code that does `return radio_driver.setRxBoostedGainMode(enable);`
+    // compiles uniformly in sim and on real hardware.
+    bool setRxBoostedGainMode(bool enabled) { rx_boosted_gain_ = enabled; return true; }
     bool getRxBoostedGainMode() const { return rx_boosted_gain_; }
 
     // Statistics interface (used by firmware)
