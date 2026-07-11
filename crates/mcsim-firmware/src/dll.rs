@@ -197,8 +197,24 @@ pub struct NodeConfig {
     /// Maximum number of firmware-level resend attempts per packet (0=disabled, 1-5, default 2).
     pub max_resend_attempts: u8,
 
+    /// Neighbour-swarm opportunistic relay of overheard DIRECT packets (0=off, 1=on, default 1 for repeater).
+    pub direct_swarm_fwd: u8,
+
+    /// Min SNR (dB) for the swarm-relay gate: val_A = R->pos1(A) (cancel), val_B = R->pos2(B) (delivery).
+    pub swarm_relay_snr_a: i8,
+    pub swarm_relay_snr_b: i8,
+
+    /// Redundancy-aware FLOOD suppression master switch (0=off, 1=on; adaptive + static fallback). Default 1.
+    pub flood_suppress: u8,
+    /// Overheard forward with SNR>=this (dB) counts double (central/redundant). Default 9.
+    pub flood_suppress_snr_hi: i8,
+    /// Overheard forward with SNR<this (dB) counts 0 (edge/preserve reach). Default 0.
+    pub flood_suppress_snr_lo: i8,
+    /// Extra TX-delay multiplier for central flood relays (widens cancel window). Default 2.
+    pub flood_suppress_delay_x: u8,
+
     /// Reserved for future use.
-    _reserved: [u8; 39],
+    _reserved: [u8; 32],
 }
 
 impl Default for NodeConfig {
@@ -223,7 +239,14 @@ impl Default for NodeConfig {
             node_lat: 0.0,
             node_lon: 0.0,
             max_resend_attempts: 2,
-            _reserved: [0; 39],
+            direct_swarm_fwd: 0,
+            swarm_relay_snr_a: 6,
+            swarm_relay_snr_b: 6,
+            flood_suppress: 1,
+            flood_suppress_snr_hi: 9,
+            flood_suppress_snr_lo: 0,
+            flood_suppress_delay_x: 2,
+            _reserved: [0; 32],
         }
     }
 }
@@ -287,6 +310,28 @@ impl NodeConfig {
     /// Set the maximum number of firmware-level resend attempts (0-5).
     pub fn with_max_resend_attempts(mut self, attempts: u8) -> Self {
         self.max_resend_attempts = attempts.min(5);
+        self
+    }
+
+    /// Enable/disable neighbour-swarm opportunistic relay of overheard DIRECT packets.
+    pub fn with_direct_swarm_fwd(mut self, on: bool) -> Self {
+        self.direct_swarm_fwd = on as u8;
+        self
+    }
+
+    /// Set min R->A / R->B SNR (dB) thresholds for the neighbour-swarm relay gate.
+    pub fn with_swarm_relay_snr(mut self, snr_a: i8, snr_b: i8) -> Self {
+        self.swarm_relay_snr_a = snr_a;
+        self.swarm_relay_snr_b = snr_b;
+        self
+    }
+
+    /// Set redundancy-aware FLOOD suppression (master switch + SNR/delay params; c is derived).
+    pub fn with_flood_suppress(mut self, on: u8, snr_hi: i8, snr_lo: i8, delay_x: u8) -> Self {
+        self.flood_suppress = on;
+        self.flood_suppress_snr_hi = snr_hi;
+        self.flood_suppress_snr_lo = snr_lo;
+        self.flood_suppress_delay_x = delay_x;
         self
     }
 

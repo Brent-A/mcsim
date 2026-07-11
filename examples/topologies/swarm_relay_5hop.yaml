@@ -1,0 +1,99 @@
+# Neighbour-Swarm Relay — 5-hop chain (path-aware CANCEL + per-hop RE-ARM test topology)
+#
+# Path: Alice → R1 → R2 → R3 → R4 → R5 → Bob   (direct path [R1,R2,R3,R4,R5], count 5)
+# Swarm01 is a neighbour of R1..R5 (reliable), does NOT hear Alice. Forward hops reliable (+6 dB)
+# so the path establishes and the forward chain runs (clean cancel/re-arm sequence).
+# Repeater boots are staggered (startup_time_s) to avoid synchronised-advert collisions.
+#
+# CONFIRMED via this topology's shorter cousins (swarm_relay.yaml, 3-hop): the swarm relay
+# SCHEDULES (pc=1 on a c=2 overheard forward) and CANCELS (pc=1 on the c=1 forward = dest reached).
+#
+# The per-hop RE-ARM (Relay1 pc>=3 canceled on a c>=2 forward → Relay2 scheduled) is the SAME
+# path-aware-table logic as the cancel, but is hard to trigger in the sim: Swarm01 is itself a
+# transmitting repeater, so half-duplex deafening makes it miss the EARLY long-path forwards
+# (c=4/5) and first hear each payload only at c=2 → Relay1 max pc=1 → no re-arm. This is a
+# sim-environment limitation, not a logic bug. (On real hardware, with a dedicated listening
+# swarm helper, the re-arm would trigger as designed.)
+#
+# Run:
+#   cargo run -- run examples/topologies/swarm_relay_5hop.yaml \
+#                    examples/behaviors/retry_stress.yaml \
+#                    --duration 250s --seed 1234 --trace Swarm01 -o /tmp/trace5.json
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+    firmware:
+      max_resend_attempts: 0
+      direct_swarm_fwd: true
+
+nodes:
+  - name: "Alice"
+    location: { lat: 47.6100, lon: -122.4200 }
+    firmware: { type: Companion }
+    keys: { public_key: "0A*" }
+
+  - name: "R1"
+    location: { lat: 47.6100, lon: -122.3800 }
+    firmware: { type: Repeater, startup_time_s: 2 }
+    keys: { public_key: "01*" }
+  - name: "R2"
+    location: { lat: 47.6100, lon: -122.3400 }
+    firmware: { type: Repeater, startup_time_s: 9 }
+    keys: { public_key: "02*" }
+  - name: "R3"
+    location: { lat: 47.6100, lon: -122.3000 }
+    firmware: { type: Repeater, startup_time_s: 16 }
+    keys: { public_key: "03*" }
+  - name: "R4"
+    location: { lat: 47.6100, lon: -122.2600 }
+    firmware: { type: Repeater, startup_time_s: 23 }
+    keys: { public_key: "06*" }
+  - name: "R5"
+    location: { lat: 47.6100, lon: -122.2200 }
+    firmware: { type: Repeater, startup_time_s: 30 }
+    keys: { public_key: "07*" }
+
+  - name: "Bob"
+    location: { lat: 47.6100, lon: -122.1800 }
+    firmware: { type: Companion }
+    keys: { public_key: "0B*" }
+
+  # Swarm helper: neighbour of R1..R5 (hears forwards), does NOT hear Alice.
+  - name: "Swarm01"
+    location: { lat: 47.6350, lon: -122.3000 }
+    firmware: { type: Repeater, startup_time_s: 37 }
+    keys: { public_key: "04*" }
+
+edges:
+  # Alice ↔ R1 reliable
+  - { from: "Alice", to: "R1", mean_snr_db_at20dbm: 15.0, snr_std_dev: 2.0 }
+  - { from: "R1", to: "Alice", mean_snr_db_at20dbm: 15.0, snr_std_dev: 2.0 }
+  # Forward hops reliable (path establishes + forward chain runs for the cancel/re-arm sequence)
+  - { from: "R1", to: "R2", mean_snr_db_at20dbm: 6.0, snr_std_dev: 4.0 }
+  - { from: "R1", to: "R2", mean_snr_db_at20dbm: 6.0, snr_std_dev: 4.0 }
+  - { from: "R2", to: "R1", mean_snr_db_at20dbm: 10.0, snr_std_dev: 2.0 }
+  - { from: "R2", to: "R3", mean_snr_db_at20dbm: 6.0, snr_std_dev: 4.0 }
+  - { from: "R3", to: "R2", mean_snr_db_at20dbm: 10.0, snr_std_dev: 2.0 }
+  - { from: "R3", to: "R4", mean_snr_db_at20dbm: 6.0, snr_std_dev: 4.0 }
+  - { from: "R4", to: "R3", mean_snr_db_at20dbm: 10.0, snr_std_dev: 2.0 }
+  - { from: "R4", to: "R5", mean_snr_db_at20dbm: 6.0, snr_std_dev: 4.0 }
+  - { from: "R5", to: "R4", mean_snr_db_at20dbm: 10.0, snr_std_dev: 2.0 }
+  - { from: "R5", to: "Bob", mean_snr_db_at20dbm: 6.0, snr_std_dev: 4.0 }
+  - { from: "Bob", to: "R5", mean_snr_db_at20dbm: 10.0, snr_std_dev: 2.0 }
+  # Swarm01 ↔ R1..R5 reliable (hears forwards, is neighbour of each for the gate)
+  - { from: "R1", to: "Swarm01", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "Swarm01", to: "R1", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "R2", to: "Swarm01", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "Swarm01", to: "R2", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "R3", to: "Swarm01", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "Swarm01", to: "R3", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "R4", to: "Swarm01", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "Swarm01", to: "R4", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "R5", to: "Swarm01", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "Swarm01", to: "R5", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }

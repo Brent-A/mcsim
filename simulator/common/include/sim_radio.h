@@ -53,6 +53,12 @@ public:
     float getLastSNR() const override;
     int getNoiseFloor() const override;
 
+    // Non-invasive LBT helpers for the swarm-relay channel-busy check (MyMesh::isResendChannelActive).
+    // Sim has no live-RSSI/CAD concept: treat "packets queued" as mid-receive, and the last injected
+    // packet's RSSI as the live channel energy (noise floor when idle).
+    bool isReceivingPacket() { return isReceiving(); }
+    float getCurrentRSSI() { return isReceiving() ? getLastRSSI() : (float)getNoiseFloor(); }
+
     // Hardware-specific stubs (no-op in simulation)
     // Returns bool to match the firmware's radio wrapper API (RadioLibWrappers.h),
     // so example code that does `return radio_driver.setRxBoostedGainMode(enable);`

@@ -198,6 +198,20 @@ pub struct RepeaterConfig {
     pub node_lon: f64,
     /// Maximum firmware-level resend attempts per packet (0=disabled, 1-5). Default 2.
     pub max_resend_attempts: u8,
+    /// Neighbour-swarm opportunistic relay of overheard DIRECT packets (0=off, 1=on). Default 1 (on) for repeaters.
+    pub direct_swarm_fwd: u8,
+    /// Min R->A SNR (dB) for the swarm-relay gate (cancel reliability). Default 6.
+    pub swarm_relay_snr_a: i8,
+    /// Min R->B SNR (dB) for the swarm-relay gate (delivery). Default 6.
+    pub swarm_relay_snr_b: i8,
+    /// Redundancy-aware FLOOD suppression master switch (0=off, 1=on; adaptive + static fallback). Default 1.
+    pub flood_suppress: u8,
+    /// Overheard forward with SNR>=this (dB) counts double (central/redundant). Default 9.
+    pub flood_suppress_snr_hi: i8,
+    /// Overheard forward with SNR<this (dB) counts 0 (edge/preserve reach). Default 0.
+    pub flood_suppress_snr_lo: i8,
+    /// Extra TX-delay multiplier for central flood relays (widens cancel window). Default 2.
+    pub flood_suppress_delay_x: u8,
 }
 
 impl Default for RepeaterConfig {
@@ -207,6 +221,13 @@ impl Default for RepeaterConfig {
             node_lat: 0.0,
             node_lon: 0.0,
             max_resend_attempts: 2,
+            direct_swarm_fwd: 1,
+            swarm_relay_snr_a: 6,
+            swarm_relay_snr_b: 6,
+            flood_suppress: 1,
+            flood_suppress_snr_hi: 9,
+            flood_suppress_snr_lo: 0,
+            flood_suppress_delay_x: 2,
         }
     }
 }
@@ -279,6 +300,10 @@ impl RepeaterFirmware {
             .with_name(&name)
             .with_location(config.node_lat, config.node_lon)
             .with_max_resend_attempts(config.max_resend_attempts)
+            .with_direct_swarm_fwd(config.direct_swarm_fwd != 0)
+            .with_swarm_relay_snr(config.swarm_relay_snr_a, config.swarm_relay_snr_b)
+            .with_flood_suppress(config.flood_suppress, config.flood_suppress_snr_hi,
+                                 config.flood_suppress_snr_lo, config.flood_suppress_delay_x)
             .with_spin_detection(
                 sim_params.spin_detection_threshold,
                 sim_params.idle_loops_before_yield,

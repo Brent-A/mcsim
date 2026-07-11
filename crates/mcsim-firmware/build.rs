@@ -395,6 +395,22 @@ fn build_firmware_dll(
             .unwrap_or(false)
     });
 
+    // Feature-detect whether the firmware exposes NodePrefs::direct_swarm_fwd
+    // (the neighbour-swarm relay feature that replaces sender-side resend). Only the
+    // core NodePrefs (CommonCLI.h) carries it; companion_radio's separate NodePrefs.h
+    // does not (companion does not opt in).
+    let fw_has_direct_swarm = fs::read_to_string(meshcore_src.join("helpers").join("CommonCLI.h"))
+        .map(|s| s.contains("direct_swarm_fwd"))
+        .unwrap_or(false);
+
+    // Feature-detect whether the firmware exposes NodePrefs::flood_suppress (the redundancy-aware
+    // FLOOD suppression master switch in simple_repeater). Only the core NodePrefs (CommonCLI.h)
+    // carries it. ("flood_suppress" is also a substring of the snr/delay params, so this matches
+    // as long as any flood_suppress* field is present.)
+    let fw_has_flood_suppress = fs::read_to_string(meshcore_src.join("helpers").join("CommonCLI.h"))
+        .map(|s| s.contains("flood_suppress"))
+        .unwrap_or(false);
+
     // Preprocessor definitions
     let mut defines: Vec<(&str, Option<&str>)> = vec![
         ("SIM_BUILD", Some("1")),
@@ -410,9 +426,20 @@ fn build_firmware_dll(
         // for any branch — no firmware-side `|| defined(MESHCORE_SIMULATOR)` edit
         // required.
         ("MESH_DEBUG", Some("1")),
+        // Match HW variants: enable the simple_repeater neighbour table so neighbour-
+        // dependent firmware features (swarm relay, adaptive flood suppression) are
+        // exercisable in the simulator. Without this, every consumer compiles out
+        // (#if MAX_NEIGHBOURS) and those features are inert in sim.
+        ("MAX_NEIGHBOURS", Some("50")),
     ];
     if fw_has_max_resend {
         defines.push(("SIM_FW_HAS_MAX_RESEND_ATTEMPTS", Some("1")));
+    }
+    if fw_has_direct_swarm {
+        defines.push(("SIM_FW_HAS_DIRECT_SWARM_FWD", Some("1")));
+    }
+    if fw_has_flood_suppress {
+        defines.push(("SIM_FW_HAS_FLOOD_SUPPRESS", Some("1")));
     }
 
     let mut objects: Vec<PathBuf> = Vec::new();

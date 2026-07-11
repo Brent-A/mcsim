@@ -107,6 +107,34 @@ struct RepeaterSimNode : public SimNodeImpl {
 #ifdef SIM_FW_HAS_MAX_RESEND_ATTEMPTS
             prefs->max_resend_attempts = config.max_resend_attempts < 6 ? config.max_resend_attempts : 2;
 #endif
+
+            // Override neighbour-swarm relay from simulation config (feature-detected by
+            // build.rs → SIM_FW_HAS_DIRECT_SWARM_FWD).
+#ifdef SIM_FW_HAS_DIRECT_SWARM_FWD
+            prefs->direct_swarm_fwd = config.direct_swarm_fwd ? 1 : 0;
+            // SNR thresholds (dB in config -> x4 for the firmware's int8 store). Clamp to a sane range.
+            int8_t snr_a = config.swarm_relay_snr_a; if (snr_a > 30) snr_a = 30; if (snr_a < -30) snr_a = -30;
+            int8_t snr_b = config.swarm_relay_snr_b; if (snr_b > 30) snr_b = 30; if (snr_b < -30) snr_b = -30;
+            prefs->swarm_relay_snr_a = snr_a * 4;
+            prefs->swarm_relay_snr_b = snr_b * 4;
+            // NOTE: boot sendNodeDiscoverReq is intentionally NOT called here (unlike HW main.cpp) —
+            // in the sim all repeaters boot together, so simultaneous discover-REQs collide and
+            // disrupt the passive advert-based neighbour discovery that the swarm relay relies on.
+            // Neighbour tables populate passively from zero-hop repeater adverts instead.
+#endif
+
+            // Override redundancy-aware FLOOD suppression from simulation config
+            // (feature-detected by build.rs → SIM_FW_HAS_FLOOD_SUPPRESS).
+#ifdef SIM_FW_HAS_FLOOD_SUPPRESS
+            prefs->flood_suppress = config.flood_suppress ? 1 : 0;
+            // SNR thresholds are in dB in the config; the firmware scales to x4 at
+            // compare time, so store them as plain dB here (unlike swarm_relay_snr).
+            int8_t fsnr_hi = config.flood_suppress_snr_hi; if (fsnr_hi > 30) fsnr_hi = 30; if (fsnr_hi < -30) fsnr_hi = -30;
+            int8_t fsnr_lo = config.flood_suppress_snr_lo; if (fsnr_lo > 30) fsnr_lo = 30; if (fsnr_lo < -30) fsnr_lo = -30;
+            prefs->flood_suppress_snr_hi = fsnr_hi;
+            prefs->flood_suppress_snr_lo = fsnr_lo;
+            prefs->flood_suppress_delay_x = config.flood_suppress_delay_x;
+#endif
         }
         
         // Reset command buffer

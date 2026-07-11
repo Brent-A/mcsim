@@ -54,6 +54,10 @@ pub use properties::{
     SIMULATION_DURATION_S, SIMULATION_SEED, SIMULATION_UART_BASE_PORT,
     FIRMWARE_TYPE, FIRMWARE_UART_PORT, FIRMWARE_STARTUP_TIME_S, FIRMWARE_STARTUP_JITTER_S,
     FIRMWARE_MAX_RESEND_ATTEMPTS,
+    FIRMWARE_DIRECT_SWARM_FWD,
+    FIRMWARE_SWARM_RELAY_SNR_A, FIRMWARE_SWARM_RELAY_SNR_B,
+    FIRMWARE_FLOOD_SUPPRESS, FIRMWARE_FLOOD_SUPPRESS_SNR_HI,
+    FIRMWARE_FLOOD_SUPPRESS_SNR_LO, FIRMWARE_FLOOD_SUPPRESS_DELAY_X,
     KEYS_PRIVATE_KEY, KEYS_PUBLIC_KEY,
     METRICS_GROUPS, METRICS_WARMUP_S, ROOM_SERVER_ROOM_ID,
     // Firmware simulation properties
@@ -674,6 +678,13 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                     node_lat: position.latitude,
                     node_lon: position.longitude,
                     max_resend_attempts: resolved.get(&FIRMWARE_MAX_RESEND_ATTEMPTS),
+                    direct_swarm_fwd: resolved.get(&FIRMWARE_DIRECT_SWARM_FWD) as u8,
+                    swarm_relay_snr_a: resolved.get(&FIRMWARE_SWARM_RELAY_SNR_A),
+                    swarm_relay_snr_b: resolved.get(&FIRMWARE_SWARM_RELAY_SNR_B),
+                    flood_suppress: resolved.get(&FIRMWARE_FLOOD_SUPPRESS),
+                    flood_suppress_snr_hi: resolved.get(&FIRMWARE_FLOOD_SUPPRESS_SNR_HI),
+                    flood_suppress_snr_lo: resolved.get(&FIRMWARE_FLOOD_SUPPRESS_SNR_LO),
+                    flood_suppress_delay_x: resolved.get(&FIRMWARE_FLOOD_SUPPRESS_DELAY_X),
                 };
                 let mut firmware = RepeaterFirmware::with_sim_params(firmware_id, fw_config, radio_id, node.name.clone(), &node_firmware_sim_params)?;
                 

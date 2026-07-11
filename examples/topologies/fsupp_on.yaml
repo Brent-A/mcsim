@@ -1,0 +1,10 @@
+# Flood suppression ON (this is also the firmware default). Merge over e.g. multi_path.yaml.
+# The threshold C is derived from the neighbour table (adaptive) with a static fallback; these
+# tune the SNR-weighting and TX-delay behaviour.
+defaults:
+  node:
+    firmware:
+      flood_suppress: 1
+      flood_suppress_snr_hi: 9      # dB: overheard forward with SNR>=this counts double
+      flood_suppress_snr_lo: 0      # dB: overheard forward with SNR<this counts 0 (preserve edge)
+      flood_suppress_delay_x: 2     # extra TX-delay multiplier for central flood relays

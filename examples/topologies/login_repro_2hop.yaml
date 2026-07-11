@@ -1,0 +1,42 @@
+# Login Reproduction Topology — 2-HOP via Repeater (Companion NOT in RoomServer range)
+#
+# Companion reaches RoomServer only through the Repeater (relay). This forces direct
+# packets to/from RoomServer to carry a relay hash (path_len >= 1), so pr-2670 resends
+# actually fire — unlike the all-in-range login_repro.yaml where every direct packet is
+# path_len 0 and no resend ever happens.
+#
+#   [Companion] <----> [Repeater] <----> [RoomServer]
+#        X (no direct link)               X (no direct link)
+#
+# Toggle: defaults.node.firmware.max_resend_attempts (2 = pr-2670 default, 0 = off).
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 868100000
+      bandwidth_hz: 62500
+      spreading_factor: 9
+      coding_rate: 5
+      tx_power_dbm: 20
+    firmware:
+      max_resend_attempts: 2
+
+nodes:
+  - name: "Companion"
+    location: { lat: 51.22770, lon: 6.77350 }
+    firmware: { type: Companion }
+
+  - name: "Repeater"
+    location: { lat: 51.22780, lon: 6.77360 }
+    firmware: { type: Repeater }
+
+  - name: "RoomServer"
+    location: { lat: 51.22790, lon: 6.77370 }
+    firmware: { type: RoomServer }
+
+edges:
+  # Only Companion<->Repeater and Repeater<->RoomServer. NO Companion<->RoomServer edge.
+  - { from: "Companion", to: "Repeater",   mean_snr_db_at20dbm: 18.0 }
+  - { from: "Repeater",   to: "Companion", mean_snr_db_at20dbm: 18.0 }
+  - { from: "Repeater",   to: "RoomServer",   mean_snr_db_at20dbm: 18.0 }
+  - { from: "RoomServer", to: "Repeater",     mean_snr_db_at20dbm: 18.0 }

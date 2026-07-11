@@ -1,0 +1,157 @@
+# Neighbour-Swarm Relay Topology
+#
+# Demonstrates the neighbour-swarm relay (replaces sender-side resend). A repeater that
+# OVERHEARS a direct packet it is not the addressed next-hop of SCHEDULES a re-transmit, and
+# then LISTENS: if another node forwards/relays the same payload first, it CANCELS its own
+# scheduled send. So a different node transmits while the original sender stays in RX
+# (half-duplex fix), and the relay only actually fires when the legit forward stalls.
+#
+# Scheduling gate (remaining path = the path the overheard packet still has to travel):
+#   count == 1  AND path[0] is a direct neighbour, OR
+#   count  > 1  AND at least TWO path entries are direct neighbours.
+# Target = the EARLIEST direct neighbour on the path; the path is trimmed so that neighbour
+# becomes the next hop (earliest at index 0 -> relay UNCHANGED, i.e. back up that hop).
+#
+# Chain:  Alice ─► R1 ─► R2 ─► R3 ─► Bob      (forward DM hops R1→R2, R2→R3, R3→Bob marginal)
+# Swarm helper: "Swarm01" is within earshot of R1 and knows R1, R2, R3. When R1 forwards
+# [R2,R3,Bob] (next hop R2, ~87% link), Swarm01 overhears it. Path count is 3 (>1) and Swarm01
+# sees TWO neighbours in it (R2 and R3) -> gate passes. Earliest neighbour is R2 (index 0), so
+# Swarm01 schedules an UNCHANGED relay of [R2,R3,Bob] — backing up the R1→R2 hop. If R2 then
+# forwards [R3,Bob], Swarm01 overhears that and CANCELS its pending relay; if R2 missed R1's
+# forward (the ~13%), Swarm01's relay fires and R2 gets a second copy via R1→Swarm01→R2.
+#
+# "Sidecar" remains a neighbour of Bob only: it can never match a swarm trigger (when it
+# overhears Bob's zero-hop traffic the path is empty) and stays inert — a negative control.
+#
+# A/B test (same topology, same seed): toggle `firmware/direct_swarm_fwd` true vs false.
+#   off → baseline, only the marginal forward links carry the DM (~87% per hop).
+#   on  → Swarm01 backs up the R1→R2 hop (schedule + cancel-on-forward) → higher DM delivery.
+#
+# Neighbour relationships (built passively from repeater adverts):
+#   R1       knows: Alice, R2, Swarm01
+#   R2       knows: R1, R3, Swarm01
+#   Swarm01  knows: R1, R2, R3          ← swarm helper for the R1→R2 hop
+#   Bob      knows: R3, Sidecar
+#   Sidecar  knows: Bob                 ← inert (zero-hop traffic can't trigger swarm)
+#
+# Run with:
+#   cargo run -- run examples/topologies/swarm_relay.yaml \
+#                    examples/behaviors/retry_stress.yaml \
+#                    --duration 350s --seed 1234 --metrics-output json
+# Compare against the same command with `direct_swarm_fwd: false` in defaults below.
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+    firmware:
+      # Sender-side resend was removed; this slot is now reserved/inert (kept for prefs-file
+      # byte compatibility). Set 0 to express "no sender retransmission".
+      max_resend_attempts: 0
+      # Neighbour-swarm opportunistic relay of overheard DIRECT packets (on for repeaters).
+      direct_swarm_fwd: true
+
+nodes:
+  # ── Active communication path: Alice → R1 → R2 → R3 → Bob ────────────────
+  - name: "Alice"
+    location:
+      lat: 47.6100
+      lon: -122.4200
+    firmware:
+      type: Companion
+    keys:
+      public_key: "0A*"
+
+  - name: "R1"
+    location:
+      lat: 47.6100
+      lon: -122.3800
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "01*"
+
+  - name: "R2"
+    location:
+      lat: 47.6100
+      lon: -122.3400
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "02*"
+
+  - name: "R3"
+    location:
+      lat: 47.6100
+      lon: -122.3000
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "03*"
+
+  - name: "Bob"
+    location:
+      lat: 47.6100
+      lon: -122.2600
+    firmware:
+      type: Companion
+    keys:
+      public_key: "0B*"
+
+  # ── Swarm helper: neighbour of R2 (successor of R1→R2), earshot of R1, link to R3 ─
+  - name: "Swarm01"
+    location:
+      lat: 47.6350
+      lon: -122.3600
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "04*"
+
+  # ── Negative control: neighbour of Bob only, never triggers swarm ─────────
+  - name: "Sidecar"
+    location:
+      lat: 47.5850
+      lon: -122.2600
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "05*"
+
+edges:
+  # ── Alice ↔ R1: reliable both ways ───────────────────────────────────────
+  - { from: "Alice",  to: "R1", mean_snr_db_at20dbm: 15.0, snr_std_dev: 2.0 }
+  - { from: "R1",     to: "Alice", mean_snr_db_at20dbm: 15.0, snr_std_dev: 2.0 }
+
+  # ── R1 → R2: MARGINAL (DM forward) ───────────────────────────────────────
+  - { from: "R1", to: "R2", mean_snr_db_at20dbm: -3.0, snr_std_dev: 4.0 }
+  # ── R2 → R1: reliable (ACK/PATH return) ──────────────────────────────────
+  - { from: "R2", to: "R1", mean_snr_db_at20dbm: 10.0, snr_std_dev: 2.0 }
+
+  # ── R2 → R3: MARGINAL (DM forward) ───────────────────────────────────────
+  - { from: "R2", to: "R3", mean_snr_db_at20dbm: -3.0, snr_std_dev: 4.0 }
+  # ── R3 → R2: reliable (ACK/PATH return) ──────────────────────────────────
+  - { from: "R3", to: "R2", mean_snr_db_at20dbm: 10.0, snr_std_dev: 2.0 }
+
+  # ── R3 → Bob: MARGINAL (DM forward, last hop) ────────────────────────────
+  - { from: "R3",  to: "Bob", mean_snr_db_at20dbm: -3.0, snr_std_dev: 4.0 }
+  # ── Bob → R3: reliable (ACK return) ──────────────────────────────────────
+  - { from: "Bob", to: "R3", mean_snr_db_at20dbm: 10.0, snr_std_dev: 2.0 }
+
+  # ── Swarm01: hears R1, neighbour of R2, delivers to R3 (all reliable) ─────
+  # Swarm01 overhears R1's [R2,R3] forward (next hop R2); R2 is its neighbour →
+  # imitate → trim R2 → re-send [R3] to R3. Bridges the R1→R2 marginal hop.
+  - { from: "R1",      to: "Swarm01", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "Swarm01", to: "R1",      mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "R2",      to: "Swarm01", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "Swarm01", to: "R2",      mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "Swarm01", to: "R3",      mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "R3",      to: "Swarm01", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+
+  # ── Sidecar: neighbour of Bob only (negative control) ─────────────────────
+  - { from: "Bob",    to: "Sidecar", mean_snr_db_at20dbm: 15.0, snr_std_dev: 2.0 }
+  - { from: "Sidecar", to: "Bob",    mean_snr_db_at20dbm: 15.0, snr_std_dev: 2.0 }

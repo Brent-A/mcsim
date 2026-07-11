@@ -187,6 +187,61 @@ pub const FIRMWARE_MAX_RESEND_ATTEMPTS: Property<u8, NodeScope> = Property::new(
     PropertyDefault::Integer(2),
 );
 
+/// Enable neighbour-swarm opportunistic relay of overheard DIRECT packets.
+/// A repeater that overhears a direct packet it is not the addressed next-hop of may
+/// re-transmit it (imitating the successor) so a different node transmits while the
+/// original sender stays in RX. Default on for repeaters. (Replaces sender-side resend.)
+pub const FIRMWARE_DIRECT_SWARM_FWD: Property<bool, NodeScope> = Property::new(
+    "firmware/direct_swarm_fwd",
+    "Enable neighbour-swarm opportunistic relay of overheard DIRECT packets (default: on for repeater)",
+    PropertyDefault::Bool(true),
+);
+
+/// Min R->A (pos1) SNR (dB) for the neighbour-swarm relay gate — R must hear A's forward to cancel
+/// its relay. Overload lever: higher = fewer redundant fires (cancel more reliable). Default 6 dB.
+pub const FIRMWARE_SWARM_RELAY_SNR_A: Property<i8, NodeScope> = Property::new(
+    "firmware/swarm_relay_snr_a",
+    "Min R->A SNR (dB) for the swarm-relay gate (cancel reliability / overload lever). Default 6",
+    PropertyDefault::Integer(6),
+);
+
+/// Min R->B (pos2) SNR (dB) for the neighbour-swarm relay gate — R's relay must reach B. Delivery
+/// lever (N/A if pos2==dest). val_A>val_B = overload-averse, val_A<val_B = delivery-averse. Default 6 dB.
+pub const FIRMWARE_SWARM_RELAY_SNR_B: Property<i8, NodeScope> = Property::new(
+    "firmware/swarm_relay_snr_b",
+    "Min R->B SNR (dB) for the swarm-relay gate (delivery lever). Default 6",
+    PropertyDefault::Integer(6),
+);
+
+/// Redundancy-aware FLOOD suppression master switch (0=off, 1=on). When on, the threshold C is
+/// derived from the neighbour table (adaptive) with a static fallback. Default 1 (zero-admin).
+pub const FIRMWARE_FLOOD_SUPPRESS: Property<u8, NodeScope> = Property::new(
+    "firmware/flood_suppress",
+    "Redundancy-aware flood suppression master switch (0=off, 1=on; adaptive + static fallback). Default 1",
+    PropertyDefault::Integer(1),
+);
+
+/// Overheard forward with SNR >= this (dB) counts double (you are central / redundant). Default 9 dB.
+pub const FIRMWARE_FLOOD_SUPPRESS_SNR_HI: Property<i8, NodeScope> = Property::new(
+    "firmware/flood_suppress_snr_hi",
+    "Flood suppression: overheard forward with SNR>=this counts double (central/redundant). Default 9 dB",
+    PropertyDefault::Integer(9),
+);
+
+/// Overheard forward with SNR < this (dB) counts 0 (you are at the edge, preserve reach). Default 0 dB.
+pub const FIRMWARE_FLOOD_SUPPRESS_SNR_LO: Property<i8, NodeScope> = Property::new(
+    "firmware/flood_suppress_snr_lo",
+    "Flood suppression: overheard forward with SNR<this counts 0 (edge/preserve reach). Default 0 dB",
+    PropertyDefault::Integer(0),
+);
+
+/// Extra TX-delay multiplier for central flood relays (widens the cancel window). Default 2.
+pub const FIRMWARE_FLOOD_SUPPRESS_DELAY_X: Property<u8, NodeScope> = Property::new(
+    "firmware/flood_suppress_delay_x",
+    "Flood suppression: extra TX-delay multiplier for central flood relays. Default 2",
+    PropertyDefault::Integer(2),
+);
+
 // ============================================================================
 // Companion Properties (Node scope)
 // ============================================================================

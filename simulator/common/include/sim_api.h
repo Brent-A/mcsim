@@ -66,8 +66,23 @@ typedef struct {
     // Overrides the firmware's built-in default of 2.
     uint8_t max_resend_attempts;
 
+    // Neighbour-swarm opportunistic relay of overheard DIRECT packets (0=off, 1=on, default 1 for repeater).
+    uint8_t direct_swarm_fwd;
+
+    // Min SNR (in dB) for the neighbour-swarm relay gate: val_A = R->pos1(A) (cancel reliability),
+    // val_B = R->pos2(B) (delivery; N/A if pos2==dest). Firmware stores these x4; sim_main.cpp scales.
+    int8_t swarm_relay_snr_a;
+    int8_t swarm_relay_snr_b;
+
+    // Redundancy-aware FLOOD suppression (simple_repeater). Master switch + SNR/delay params;
+    // c is derived (adaptive) with a static fallback. flood_suppress==0 => OFF.
+    uint8_t flood_suppress;          // master switch (0 = off, 1 = on)
+    int8_t  flood_suppress_snr_hi;   // dB: overheard forward with SNR>=this counts double
+    int8_t  flood_suppress_snr_lo;   // dB: overheard forward with SNR<this counts 0
+    uint8_t flood_suppress_delay_x;  // extra TX-delay multiplier for central flood relays
+
     // Reserved for future use
-    uint8_t _reserved[39];               // Reduced from 40 to account for max_resend_attempts
+    uint8_t _reserved[32];           // Reduced to account for the 4 flood_suppress_* bytes
 } SimNodeConfig;
 
 // ============================================================================
