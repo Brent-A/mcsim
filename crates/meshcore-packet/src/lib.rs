@@ -338,6 +338,9 @@ pub const CORRIDOR_RADIUS_KM: [f32; 16] = [
 /// Maximum number of corridor triples per packet.
 pub const MAX_CORRIDOR_TRIPLES: usize = 8;
 
+/// Encoded size of one corridor triple on the wire (14-bit lat / 14-bit lon / 4-bit radius).
+pub const CORRIDOR_TRIPLE_BYTES: usize = 4;
+
 /// Error returned when a corridor radius does not match any supported value.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CorridorRadiusError {
@@ -1123,6 +1126,10 @@ pub struct MeshCorePacket {
     pub header: PacketHeader,
     /// Routing path (node hashes).
     pub path: Vec<u8>,
+    /// Flood Corridor region (raw triple bytes, between path and payload).
+    /// Populated only when `transport_codes.code2` carries a triple count N > 0;
+    /// length is then N * CORRIDOR_TRIPLE_BYTES. Empty for non-corridor packets.
+    pub corridor: Vec<u8>,
     /// Packet payload.
     pub payload: PacketPayload,
 }
@@ -1132,6 +1139,7 @@ impl Default for MeshCorePacket {
         Self {
             header: PacketHeader::default(),
             path: Vec::new(),
+            corridor: Vec::new(),
             payload: PacketPayload::default(),
         }
     }
@@ -1153,6 +1161,7 @@ impl MeshCorePacket {
                 path_len: 0,
             },
             path: Vec::new(),
+            corridor: Vec::new(),
             payload,
         }
     }
@@ -1310,6 +1319,17 @@ impl MeshCorePacket {
 
         if offset > bytes.len() {
             return None;
+        }
+
+        // Skip the Flood Corridor region (between path and payload): code_2 count N > 0
+        // means N×CORRIDOR_TRIPLE_BYTES follow. This keeps the hash over the standard
+        // payload only, matching the C++ calculatePacketHash (which excludes corridor).
+        if route_type.has_transport_codes() {
+            let code2 = u16::from_le_bytes([bytes[3], bytes[4]]);
+            offset += crate::corridor_count(code2) as usize * CORRIDOR_TRIPLE_BYTES;
+            if offset > bytes.len() {
+                return None;
+            }
         }
 
         let payload_data = &bytes[offset..];

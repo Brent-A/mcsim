@@ -24,6 +24,7 @@ SimRadio::SimRadio()
     , last_polled_version_(0)
     , poll_count_(0)
     , recv_mode_(false)
+    , channel_noisy_latched_(false)
 {
 }
 
@@ -235,6 +236,16 @@ int SimRadio::getNoiseFloor() const {
     return -120;  // Typical noise floor
 }
 
+bool SimRadio::isChannelNoisy() {
+    // Sim-only (see header): consume the noise latch one-shot. There is no continuous RSSI in sim,
+    // so a strong injected packet (neighbor/interferer on-air) latches noisy and the dwell probe
+    // reads it once, triggering a dwell deferral window via the Dispatcher's last_channel_noisy_ms.
+    checkForSpin();
+    bool noisy = channel_noisy_latched_;
+    channel_noisy_latched_ = false;
+    return noisy;
+}
+
 void SimRadio::injectRxPacket(const uint8_t* data, size_t len, float rssi, float snr) {
     std::lock_guard<std::mutex> lock(rx_mutex_);
     
@@ -261,6 +272,15 @@ void SimRadio::injectRxPacket(const uint8_t* data, size_t len, float rssi, float
     
     rx_queue_.push(pkt);
     state_version_++;  // State changed - packet arrived
+
+    // Latch channel-noisy for the dwell gate if this packet is strong (a close neighbor / interferer
+    // on-air). SF-scaled margin mirrors hardware getDwellRssiMargin() (18 dB @SF7, -1/SF, floor 12).
+    {
+        int sf = static_cast<int>(sf_);
+        int margin = 18 - (sf > 7 ? sf - 7 : 0);
+        if (margin < 12) margin = 12;
+        if (rssi > (float)(getNoiseFloor() + margin)) channel_noisy_latched_ = true;
+    }
 }
 
 uint32_t SimRadio::getTxAirtime() const {

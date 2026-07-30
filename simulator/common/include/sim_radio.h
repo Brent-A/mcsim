@@ -59,6 +59,14 @@ public:
     bool isReceivingPacket() { return isReceiving(); }
     float getCurrentRSSI() { return isReceiving() ? getLastRSSI() : (float)getNoiseFloor(); }
 
+    // Quiet-dwell gate energy probe (Dispatcher samples this every DWELL_SAMPLE_INTERVAL while in RX).
+    // Sim has no continuous RSSI, so latch "noisy" on each STRONG injected packet (a neighbor or
+    // interferer went on-air) and let the dwell probe consume the latch one-shot: each strong
+    // injection then triggers exactly one dwell deferral window via the Dispatcher's
+    // last_channel_noisy_ms. This stands in for hardware's live-RSSI-above-margin detection and
+    // makes the dwell gate (and the path-staggered release) exercisable in sim. Sim-only behavior.
+    bool isChannelNoisy() override;
+
     // Hardware-specific stubs (no-op in simulation)
     // Returns bool to match the firmware's radio wrapper API (RadioLibWrappers.h),
     // so example code that does `return radio_driver.setRxBoostedGainMode(enable);`
@@ -137,4 +145,5 @@ private:
 
     // State
     bool recv_mode_;
+    bool channel_noisy_latched_;   // sim-only: set on strong RX injection, consumed one-shot by isChannelNoisy()
 };
