@@ -46,7 +46,7 @@ pub use properties::{
     AGENT_CHANNEL_SESSION_MESSAGE_COUNT, AGENT_CHANNEL_SESSION_INTERVAL_S, AGENT_CHANNEL_SESSION_INTERVAL_JITTER_S,
     AGENT_CHANNEL_MESSAGE_COUNT, AGENT_CHANNEL_SHUTDOWN_S, AGENT_CHANNEL_CORRIDOR,
     // CLI properties
-    CLI_PASSWORD, CLI_COMMANDS,
+    CLI_PASSWORD, CLI_COMMANDS, CLI_SCHEDULED,
     // Agent config types
     AgentConfig, DirectMessageConfig, ChannelMessageConfig, TraceMessageConfig,
     LINK_MEAN_SNR_DB_AT20DBM, LINK_SNR_STD_DEV, LINK_RSSI_DBM,
@@ -565,7 +565,8 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         if is_repeater || is_room_server {
             let cli_password: Option<String> = node.properties().get(&CLI_PASSWORD);
             let cli_commands: Vec<String> = node.properties().get(&CLI_COMMANDS);
-            if cli_password.is_some() || !cli_commands.is_empty() {
+            let cli_scheduled: Vec<String> = node.properties().get(&CLI_SCHEDULED);
+            if cli_password.is_some() || !cli_commands.is_empty() || !cli_scheduled.is_empty() {
                 let cli_agent_id = EntityId::new(next_entity_id);
                 next_entity_id += 1;
                 node_name_to_cli_agent_id.insert(node.name.clone(), cli_agent_id);
@@ -1129,17 +1130,20 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         // Build CLI agent config
         let cli_password: Option<String> = props.get(&CLI_PASSWORD);
         let cli_commands: Vec<String> = props.get(&CLI_COMMANDS);
+        let cli_scheduled: Vec<String> = props.get(&CLI_SCHEDULED);
 
         let cli_agent_config = mcsim_agents::CliAgentConfig {
             name: node_config.name.clone(),
             password: cli_password,
             commands: cli_commands,
+            scheduled: cli_scheduled,
         };
 
         log::debug!(
-            "Creating CliAgent for '{}' with {} commands",
+            "Creating CliAgent for '{}' with {} commands, {} scheduled probes",
             node_config.name,
-            cli_agent_config.commands.len()
+            cli_agent_config.commands.len(),
+            cli_agent_config.scheduled.len()
         );
 
         let cli_agent = mcsim_agents::CliAgent::new(cli_agent_id, cli_agent_config, node_id, firmware_id);

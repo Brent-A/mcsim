@@ -1,0 +1,33 @@
+# Teil-B probes on the central repeater R5 of multi_path.yaml. Queries local runtime state at
+# four points spanning the advert rounds (first advert ~boot+120s with ±30s boot jitter, then
+# every 120s) to watch coverage build up over time:
+#   @90  -> before the 1st advert round: expect -none- (neighbour table empty)
+#   @200 -> after the 1st round: neighbours start appearing
+#   @300 -> after the 2nd round: neighbours + reach edges growing
+#   @400 -> after the 3rd round: mature coverage, suppression ratio should rise above 0%
+#   neighbors -> 8-hex near-neighbour prefixes (seed reach <hash> probes for a follow-up run)
+#   clients  -> attached-client set
+#   get flood.suppress -> cumulative "suppressed N/M (P%)"
+#
+# Run (seed-fixed so neighbour hashes are reproducible for a reach follow-up):
+#   cargo run -- run examples/topologies/multi_path.yaml \
+#                  examples/topologies/fsupp_on.yaml \
+#                  examples/behaviors/fsupp_floods.yaml \
+#                  examples/behaviors/fsupp_probe.yaml \
+#                  --duration 420s --seed 1 --sequential --output /tmp/trace_b1.json --trace "R5"
+nodes:
+  - name: "R5"
+    cli:
+      scheduled:
+        - "@90 neighbors"
+        - "@90 clients"
+        - "@90 get flood.suppress"
+        - "@200 neighbors"
+        - "@200 clients"
+        - "@200 get flood.suppress"
+        - "@300 neighbors"
+        - "@300 clients"
+        - "@300 get flood.suppress"
+        - "@400 neighbors"
+        - "@400 clients"
+        - "@400 get flood.suppress"

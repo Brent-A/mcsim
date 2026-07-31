@@ -342,6 +342,19 @@ pub const CLI_COMMANDS: Property<Vec<String>, NodeScope> = Property::new(
 )
 .with_type(PropertyType::new(PropertyBaseType::String).array());
 
+/// CLI commands to send at scheduled absolute simulation times (runtime probing).
+///
+/// Unlike `cli/commands` (which fire once at startup, before the network has populated),
+/// each entry here fires at a chosen sim time so runtime-populated state can be queried —
+/// e.g. `clients`, `reach <hash>`, `get flood.suppress`, `neighbors`. Each entry is a string
+/// of the form `"@<seconds> <command>"`, e.g. `"@250 clients"` or `"@120 reach 01020304"`.
+pub const CLI_SCHEDULED: Property<Vec<String>, NodeScope> = Property::new(
+    "cli/scheduled",
+    "CLI commands to send at scheduled absolute sim times, for probing runtime state after the network has populated. Each entry: '@<seconds> <command>' (e.g. ['@120 neighbors', '@250 reach 01020304']).",
+    PropertyDefault::Vec(&[]),
+)
+.with_type(PropertyType::new(PropertyBaseType::String).array());
+
 // ============================================================================
 // Agent Direct Message Properties (Node scope)
 // ============================================================================

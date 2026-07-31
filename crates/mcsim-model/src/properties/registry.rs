@@ -127,6 +127,7 @@ pub const ALL_PROPERTIES: &[&PropertyDef] = &[
     // CLI
     &CLI_PASSWORD.def,
     &CLI_COMMANDS.def,
+    &CLI_SCHEDULED.def,
     // Radio Thresholds (Simulation scope)
     &RADIO_CAPTURE_EFFECT_THRESHOLD_DB.def,
     &RADIO_NOISE_FLOOR_DBM.def,

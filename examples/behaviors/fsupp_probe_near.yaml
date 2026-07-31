@@ -1,0 +1,18 @@
+# Verify the negative-coverage cache + round-robin: query `near` on R5 at several points after
+# neighbours populate (~200s) and watch the `meas sent=...` line LEVEL OFF (was: climbing ~1/tick
+# forever). With the cache, each directed pair is probed once (times out or returns weak), cached
+# ~10h, so `meas sent` plateaus and `neg`/`tmo` grow instead.
+#
+#   cargo run -- run examples/topologies/multi_path.yaml \
+#                  examples/topologies/fsupp_on.yaml \
+#                  examples/behaviors/fsupp_floods.yaml \
+#                  examples/behaviors/fsupp_probe_near.yaml \
+#                  --duration 750s --seed 1 --sequential --output /tmp/trace_near.json --trace "R5"
+nodes:
+  - name: "R5"
+    cli:
+      scheduled:
+        - "@250 near"
+        - "@400 near"
+        - "@550 near"
+        - "@700 near"

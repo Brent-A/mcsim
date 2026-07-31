@@ -129,6 +129,7 @@ pub use definitions::{
     // CLI (Node scope)
     CLI_PASSWORD,
     CLI_COMMANDS,
+    CLI_SCHEDULED,
     // Colocated Prediction (Simulation scope)
     COLOCATED_PATH_LOSS_DB,
     // Companion

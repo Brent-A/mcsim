@@ -65,7 +65,12 @@ public:
     // injection then triggers exactly one dwell deferral window via the Dispatcher's
     // last_channel_noisy_ms. This stands in for hardware's live-RSSI-above-margin detection and
     // makes the dwell gate (and the path-staggered release) exercisable in sim. Sim-only behavior.
-    bool isChannelNoisy() override;
+    //
+    // NOTE: no `override` — the base mesh::Radio only declares isChannelNoisy() virtual on
+    // quiet-dwell-based firmware branches; on others (e.g. flood-suppression-coverage) it is
+    // absent and `override` would not compile. Virtuality is inherited where the base provides it,
+    // so omitting `override` works on both.
+    bool isChannelNoisy();
 
     // Hardware-specific stubs (no-op in simulation)
     // Returns bool to match the firmware's radio wrapper API (RadioLibWrappers.h),

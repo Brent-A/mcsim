@@ -1,0 +1,20 @@
+# Flood traffic overlay to populate flood-suppression coverage state AND give the feature enough
+# floods to suppress. Three broadcasters at a moderate cadence. (Neighbours seed from ~60s adverts
+# via the sim desync; reach edges + suppression fire from these GroupText flood forwards.)
+#
+# Pair with multi_path.yaml + fsupp_on.yaml / fsupp_baseline.yaml:
+#   cargo run -- run examples/topologies/multi_path.yaml \
+#                  examples/topologies/fsupp_on.yaml \
+#                  examples/behaviors/fsupp_floods.yaml \
+#                  --duration 420s --seed 1 --sequential
+defaults:
+  node:
+    firmware:
+      startup_time_jitter_s: 30.0
+nodes:
+  - name: "Alice"
+    agent: { channel: { enabled: true, interval_s: 16.0, interval_jitter_s: 3.0 } }
+  - name: "Charlie"
+    agent: { channel: { enabled: true, interval_s: 18.0, interval_jitter_s: 3.0 } }
+  - name: "Dave"
+    agent: { channel: { enabled: true, interval_s: 20.0, interval_jitter_s: 3.0 } }

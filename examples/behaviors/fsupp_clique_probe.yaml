@@ -1,0 +1,18 @@
+# Clique verification probe (RUN 2 / reach): R1 has 2 neighbours (E07C9D66=R2 and
+# 6E042FB1=R3), so it measures exactly that pair via TRACE. Query reach for both:
+# non-'-' lines = measured directed edges -> POSITIVE proof active TRACE coverage
+# populates the reach graph.
+#
+#   cargo run -- run examples/topologies/fsupp_clique.yaml \
+#                  examples/topologies/fsupp_on.yaml \
+#                  examples/behaviors/fsupp_clique_probe.yaml \
+#                  --duration 400s --seed 1 --sequential --output /tmp/clique.json --trace "R1"
+nodes:
+  - name: "R1"
+    cli:
+      scheduled:
+        - "@350 near"
+        - "@350 neighbors"
+        - "@350 reach E07C9D66"
+        - "@350 reach 6E042FB1"
+        - "@350 get flood.suppress"

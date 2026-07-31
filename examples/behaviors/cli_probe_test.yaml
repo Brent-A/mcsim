@@ -1,0 +1,15 @@
+# Teil-A verification overlay: fire scheduled CLI probes on a Repeater to prove the
+# cli.scheduled round-trip (command sent at a chosen sim time -> serial reply captured
+# in the trace as SERIAL_TX / "CLI probe complete:").
+#
+# Pair with any topology that has a node named "Repeater", e.g. two_peers.yaml:
+#   cargo run -- run examples/topologies/two_peers.yaml \
+#                  examples/behaviors/cli_probe_test.yaml \
+#                  --duration 25s --seed 1 --sequential \
+#                  --output /tmp/trace_a.json --trace "*"
+nodes:
+  - name: "Repeater"
+    cli:
+      scheduled:
+        - "@10 clients"      # expect "-> -none-" early (no clients populated yet)
+        - "@15 neighbors"    # expect at least Alice/Bob after adverts
