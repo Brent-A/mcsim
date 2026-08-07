@@ -216,6 +216,10 @@ extern thread_local SPIFFSClass SPIFFS;
 // Define fs::SPIFFSFS for compatibility with firmware code
 namespace fs {
     using SPIFFSFS = SPIFFSClass;
+    // Firmware (ESP32) declares File inside namespace fs (fs::File) and aliases
+    // it into the global namespace via `using File = fs::File;`. In the sim the
+    // canonical type is the global ::File, so mirror the inverse alias here.
+    using File = ::File;
 }
 
 // Define FILESYSTEM type for firmware compatibility

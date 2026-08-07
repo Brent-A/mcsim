@@ -1,0 +1,49 @@
+# 4-repeater clique for Part 2 (passive TRACE harvest) verification. R4 is a pure BYSTANDER
+# to coverage TRACES that R1/R2/R3 initiate among their own near pairs: e.g. R1's [R2,R3,R1]
+# final leg (R3->R1, carrying path[1] = the R2->R3 SNR) is overheard by R4, which adopts the
+# R2->R3 edge WITHOUT being a/b/initiator. Expect R4 `near` to show harv>0 (edges adopted from
+# neighbours' TRACES) on top of its own self-measured edges.
+#
+#   cargo run -- run examples/topologies/fsupp_clique4.yaml \
+#                  examples/topologies/fsupp_on.yaml \
+#                  examples/behaviors/fsupp_clique4_probe.yaml \
+#                  --duration 500s --seed 1 --sequential --trace "R4"
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+    firmware:
+      startup_time_jitter_s: 20.0   # spread boot times -> first adverts/measurements desync
+
+nodes:
+  - name: "R1"
+    location: { lat: 47.6100, lon: -122.3500 }
+    firmware: { type: Repeater }
+  - name: "R2"
+    location: { lat: 47.6101, lon: -122.3501 }
+    firmware: { type: Repeater }
+  - name: "R3"
+    location: { lat: 47.6100, lon: -122.3502 }
+    firmware: { type: Repeater }
+  - name: "R4"
+    location: { lat: 47.6101, lon: -122.3503 }
+    firmware: { type: Repeater }
+
+edges:
+  # all 6 pairs, both directions, strong & symmetric
+  - { from: "R1", to: "R2", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R2", to: "R1", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R1", to: "R3", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R3", to: "R1", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R1", to: "R4", mean_snr_db_at20dbm: 14.0 }
+  - { from: "R4", to: "R1", mean_snr_db_at20dbm: 14.0 }
+  - { from: "R2", to: "R3", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R3", to: "R2", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R2", to: "R4", mean_snr_db_at20dbm: 14.0 }
+  - { from: "R4", to: "R2", mean_snr_db_at20dbm: 14.0 }
+  - { from: "R3", to: "R4", mean_snr_db_at20dbm: 14.0 }
+  - { from: "R4", to: "R3", mean_snr_db_at20dbm: 14.0 }

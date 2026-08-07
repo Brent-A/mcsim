@@ -1,0 +1,10 @@
+# Part 2 harvest verification: query R4 (the pure bystander) `near` at two points after the
+# reach graph populates and watch `harv` GROW (edges adopted from overheard R1/R2/R3 TRACES)
+# while `edge` is R4's own self-measured set. unr should stay 0 (all links symmetric).
+nodes:
+  - name: "R4"
+    cli:
+      scheduled:
+        - "@300 near"
+        - "@450 near"
+        - "@450 get flood.suppress"

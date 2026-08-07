@@ -514,6 +514,7 @@ fn build_firmware_dll(
         "AdvertDataHelpers.cpp",
         "TxtDataHelpers.cpp",
         "CommonCLI.cpp",
+        "ConfigSerializer.cpp",
         "ClientACL.cpp",
         "TransportKeyStore.cpp",
         "RegionMap.cpp",
