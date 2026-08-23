@@ -158,27 +158,42 @@ pub struct ContactTarget {
     pub public_key: NodeId,
     /// Contact type (ADV_TYPE_CHAT, ADV_TYPE_REPEATER, ADV_TYPE_ROOM_SERVER).
     pub contact_type: u8,
+    /// Contact latitude in microdegrees (0 = unknown). Pre-seeded from the
+    /// node's location so firmware features that read contact positions
+    /// (e.g. flood corridor proposals) work before an advert arrives.
+    #[serde(default)]
+    pub gps_lat: i32,
+    /// Contact longitude in microdegrees (0 = unknown).
+    #[serde(default)]
+    pub gps_lon: i32,
 }
 
 impl ContactTarget {
     /// Create a new contact target with a specified type.
     pub fn new(name: String, public_key: NodeId, contact_type: u8) -> Self {
-        ContactTarget { name, public_key, contact_type }
+        ContactTarget { name, public_key, contact_type, gps_lat: 0, gps_lon: 0 }
     }
-    
+
     /// Create a new chat contact target.
     pub fn chat(name: String, public_key: NodeId) -> Self {
-        ContactTarget { name, public_key, contact_type: ADV_TYPE_CHAT }
+        ContactTarget { name, public_key, contact_type: ADV_TYPE_CHAT, gps_lat: 0, gps_lon: 0 }
     }
-    
+
     /// Create a new repeater contact target.
     pub fn repeater(name: String, public_key: NodeId) -> Self {
-        ContactTarget { name, public_key, contact_type: ADV_TYPE_REPEATER }
+        ContactTarget { name, public_key, contact_type: ADV_TYPE_REPEATER, gps_lat: 0, gps_lon: 0 }
     }
-    
+
     /// Create a new room server contact target.
     pub fn room_server(name: String, public_key: NodeId) -> Self {
-        ContactTarget { name, public_key, contact_type: ADV_TYPE_ROOM_SERVER }
+        ContactTarget { name, public_key, contact_type: ADV_TYPE_ROOM_SERVER, gps_lat: 0, gps_lon: 0 }
+    }
+
+    /// Attach a pre-seeded position (microdegrees) to this contact.
+    pub fn with_gps(mut self, gps_lat: i32, gps_lon: i32) -> Self {
+        self.gps_lat = gps_lat;
+        self.gps_lon = gps_lon;
+        self
     }
 }
 
@@ -814,8 +829,8 @@ impl Agent {
             out_path: [0u8; MAX_PATH_SIZE],
             name: contact.name.clone(),
             last_advert_timestamp: 0,
-            gps_lat: 0,
-            gps_lon: 0,
+            gps_lat: contact.gps_lat,
+            gps_lon: contact.gps_lon,
             lastmod: 0,
         };
         

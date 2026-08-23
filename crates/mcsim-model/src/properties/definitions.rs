@@ -235,11 +235,11 @@ pub const FIRMWARE_FLOOD_SUPPRESS_SNR_LO: Property<i8, NodeScope> = Property::ne
     PropertyDefault::Integer(0),
 );
 
-/// Extra TX-delay multiplier for central flood relays (widens the cancel window). Default 2.
+/// Extra TX-delay multiplier for central flood relays (widens the cancel window). Default 3.
 pub const FIRMWARE_FLOOD_SUPPRESS_DELAY_X: Property<u8, NodeScope> = Property::new(
     "firmware/flood_suppress_delay_x",
-    "Flood suppression: extra TX-delay multiplier for central flood relays. Default 2",
-    PropertyDefault::Integer(2),
+    "Flood suppression: extra TX-delay multiplier for central flood relays. Default 3",
+    PropertyDefault::Integer(3),
 );
 
 // ============================================================================

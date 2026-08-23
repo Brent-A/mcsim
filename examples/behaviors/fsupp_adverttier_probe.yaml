@@ -1,0 +1,43 @@
+# ADVERT-Tier-Split A/B probe, stage 2: make FLOOD adverts actually flow.
+#
+# Stage 1 (fsupp_adverttier_probe.yaml at 300s) showed why nothing was suppressible:
+# with default prefs only ZERO-HOP (DIRECT) adverts exist -- flood adverts fire every
+# 47h (flood_advert_interval, min settable 3h) and even then flood_max_advert=0 stops
+# them at the first receiver. So: enable both via CLI (staggered per node so the 3h
+# timers don't fire simultaneously), then read R4's suppression counters.
+#
+#   Baseline (advert = Tier B):  suppressed 0/0  -- advert rebroadcasts always forward.
+#   With repeater-advert Tier A: suppressed > 0  -- redundant advert rebroadcasts die.
+#
+#   cargo run --release -- run examples/topologies/fsupp_clique4.yaml \
+#                  examples/topologies/fsupp_on.yaml \
+#                  examples/behaviors/fsupp_adverttier_probe.yaml \
+#                  --duration 11400s --seed 1 --sequential --trace "R4" \
+#                  --output trace_adverttier_stage2.json \
+#                  --metric mcsim.packet.tx_flood --metric mcsim.radio.tx_packets
+nodes:
+  - name: "R1"
+    cli:
+      scheduled:
+        - "@10 set flood.advert.interval 3"
+        - "@10 set flood.max.advert 2"
+        - "@10 set flood.max.unscoped 2"
+  - name: "R2"
+    cli:
+      scheduled:
+        - "@70 set flood.advert.interval 3"
+        - "@70 set flood.max.advert 2"
+        - "@70 set flood.max.unscoped 2"
+  - name: "R3"
+    cli:
+      scheduled:
+        - "@130 set flood.advert.interval 3"
+        - "@130 set flood.max.advert 2"
+        - "@130 set flood.max.unscoped 2"
+  - name: "R4"
+    cli:
+      scheduled:
+        - "@190 set flood.advert.interval 3"
+        - "@190 set flood.max.advert 2"
+        - "@190 set flood.max.unscoped 2"
+        - "@11100 get flood.suppress"

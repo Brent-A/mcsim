@@ -532,6 +532,8 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
     let mut node_name_to_agent_id: std::collections::BTreeMap<String, EntityId> = std::collections::BTreeMap::new();
     let mut node_name_to_cli_agent_id: std::collections::BTreeMap<String, EntityId> = std::collections::BTreeMap::new();
     let mut node_name_to_firmware_type: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    // Node name -> (latitude, longitude) in decimal degrees, for pre-seeding contact positions.
+    let mut node_name_to_location: std::collections::BTreeMap<String, (f64, f64)> = std::collections::BTreeMap::new();
     // Map from node name to computed firmware startup time (with jitter applied)
     let mut node_name_to_firmware_startup_time: std::collections::BTreeMap<String, SimTime> = std::collections::BTreeMap::new();
     
@@ -621,6 +623,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
             longitude: resolved.get(&properties::LOCATION_LONGITUDE),
             altitude_m: resolved.get(&properties::LOCATION_ALTITUDE_M),
         };
+        node_name_to_location.insert(node.name.clone(), (position.latitude, position.longitude));
         let radio_config = mcsim_lora::RadioConfig {
             params: radio_params,
             rx_to_tx_turnaround: SimTime::from_micros(100),
@@ -729,6 +732,8 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                         encryption_key: None,
                         rng_seed: node_rng_seed,
                     },
+                    node_lat: position.latitude,
+                    node_lon: position.longitude,
                     max_resend_attempts: resolved.get(&FIRMWARE_MAX_RESEND_ATTEMPTS),
                 };
                 let firmware = CompanionFirmware::with_sim_params(firmware_id, fw_config, radio_id, agent_id, node.name.clone(), &node_firmware_sim_params)?;
@@ -876,10 +881,16 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         // 
         // Helper to create contact with correct type based on firmware type
         let make_contact = |name: &str, node_id: NodeId| -> mcsim_agents::ContactTarget {
-            match node_name_to_firmware_type.get(name).map(|s| s.as_str()) {
+            let target = match node_name_to_firmware_type.get(name).map(|s| s.as_str()) {
                 Some("repeater") => mcsim_agents::ContactTarget::repeater(name.to_string(), node_id),
                 Some("room_server") | Some("roomserver") => mcsim_agents::ContactTarget::room_server(name.to_string(), node_id),
                 _ => mcsim_agents::ContactTarget::chat(name.to_string(), node_id),
+            };
+            // Pre-seed the contact position (microdegrees) from the node's location,
+            // so contact-position-based firmware features work from sim start.
+            match node_name_to_location.get(name) {
+                Some(&(lat, lon)) => target.with_gps((lat * 1e6).round() as i32, (lon * 1e6).round() as i32),
+                None => target,
             }
         };
         

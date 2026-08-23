@@ -227,7 +227,7 @@ impl Default for RepeaterConfig {
             flood_suppress: 1,
             flood_suppress_snr_hi: 9,
             flood_suppress_snr_lo: 0,
-            flood_suppress_delay_x: 2,
+            flood_suppress_delay_x: 3,
         }
     }
 }
@@ -642,6 +642,10 @@ impl FirmwareEntity for RepeaterFirmware {
 pub struct CompanionConfig {
     /// Base firmware configuration.
     pub base: FirmwareConfig,
+    /// Node latitude (decimal degrees). 0.0 = unknown.
+    pub node_lat: f64,
+    /// Node longitude (decimal degrees). 0.0 = unknown.
+    pub node_lon: f64,
     /// Maximum firmware-level resend attempts per packet (0=disabled, 1-5). Default 2.
     pub max_resend_attempts: u8,
 }
@@ -650,6 +654,8 @@ impl Default for CompanionConfig {
     fn default() -> Self {
         CompanionConfig {
             base: FirmwareConfig::default(),
+            node_lat: 0.0,
+            node_lon: 0.0,
             max_resend_attempts: 2,
         }
     }
@@ -720,6 +726,7 @@ impl CompanionFirmware {
             .with_initial_time(0, initial_rtc)
             .with_rng_seed(config.base.rng_seed)
             .with_name(&name)
+            .with_location(config.node_lat, config.node_lon)
             .with_max_resend_attempts(config.max_resend_attempts)
             .with_spin_detection(
                 sim_params.spin_detection_threshold,

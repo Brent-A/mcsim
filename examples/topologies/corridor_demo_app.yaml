@@ -1,0 +1,153 @@
+# Geo-Corridor App Demo Network
+# Corridor proposal (opcode 66 → 29) + corridor-scoped channel flood demo.
+#
+# Connect an external companion app to Alice's UART port and a second app
+# instance (verifier) to Bob's port:
+#   Alice → tcp://localhost:9300
+#   Bob   → tcp://localhost:9301
+#
+# Geometry (default firmware r_hop = 12 km, so Bob at ~18 km needs a Tier-1
+# hop through R_in_H — the proposal visibly bends at R_in_H, which sits ~2.5 km
+# west of the straight Alice→Bob line):
+#
+#   Alice (47.6100, -122.4000)  sender, app-driven
+#     ╲
+#      R_in_H (47.6650, -122.3450)   in-corridor repeater, ~7 km from Alice
+#        ╲
+#         Bob (47.7400, -122.2500)  receiver, ~18 km NE of Alice
+#         ↑
+#   R_in_V (47.7050, -122.2950)   in-corridor repeater near Bob (density)
+#
+#   R_out_SW (47.5000, -122.5500)  ~20 km SW — outside a user-narrowed corridor
+#   R_out_N  (47.8500, -122.3000)  ~15 km N  — outside a user-narrowed corridor
+#
+# Contact positions are pre-seeded from these locations (no advert wait), so
+# the firmware's corridor proposal uses them from sim start. The default D9
+# proposal is redundancy-wide; narrowing radii in the app editor drops the
+# R_out repeaters out of the corridor (they stop forwarding).
+#
+# Delivery path: Alice → R_in_H → R_in_V → Bob. Bob hears ONLY R_in_V, so a
+# corridor that excludes R_in_V cleanly stops delivery (negative control).
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz:  62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+
+nodes:
+  # ── Companions (app-controlled) ───────────────────────────────────────────
+  - name: "Alice"
+    location:
+      lat:  47.6100
+      lon: -122.4000
+    firmware:
+      type: Companion
+      uart_port: 9300
+    # No traffic agent - this node is controlled by an external user client
+    agent:
+      direct:
+        enabled: false
+      channel:
+        enabled: false
+    keys:
+      public_key: "AA*"
+
+  - name: "Bob"
+    location:
+      lat:  47.7400
+      lon: -122.2500
+    firmware:
+      type: Companion
+      uart_port: 9301
+    # No traffic agent - second app instance acts as the receiver/verifier
+    agent:
+      direct:
+        enabled: false
+      channel:
+        enabled: false
+    keys:
+      public_key: "BB*"
+
+  # ── Repeaters inside the corridor ─────────────────────────────────────────
+  - name: "R_in_H"
+    location:
+      lat:  47.6650
+      lon: -122.3450
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "01*"
+
+  - name: "R_in_V"
+    location:
+      lat:  47.7050
+      lon: -122.2950
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "02*"
+
+  # ── Repeaters outside the corridor ────────────────────────────────────────
+  - name: "R_out_SW"
+    location:
+      lat:  47.5000     # ~20 km SW of Alice
+      lon: -122.5500
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "03*"
+
+  - name: "R_out_N"
+    location:
+      lat:  47.8500     # ~15 km N of Bob
+      lon: -122.3000
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "04*"
+
+# ── Radio links ──────────────────────────────────────────────────────────────
+edges:
+  # Delivery chain: Alice → R_in_H → R_in_V → Bob
+  - from: "Alice"
+    to: "R_in_H"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R_in_H"
+    to: "Alice"
+    mean_snr_db_at20dbm: 12.0
+
+  - from: "R_in_H"
+    to: "R_in_V"
+    mean_snr_db_at20dbm: 10.0
+  - from: "R_in_V"
+    to: "R_in_H"
+    mean_snr_db_at20dbm: 10.0
+
+  # Bob hears ONLY R_in_V (clean negative control: exclude R_in_V from the
+  # corridor and delivery stops)
+  - from: "R_in_V"
+    to: "Bob"
+    mean_snr_db_at20dbm: 12.0
+  - from: "Bob"
+    to: "R_in_V"
+    mean_snr_db_at20dbm: 12.0
+
+  # Out-of-corridor repeaters hear Alice directly (so the flood reaches them
+  # and their corridor geo-check decides whether they forward)
+  - from: "Alice"
+    to: "R_out_SW"
+    mean_snr_db_at20dbm: 8.0
+  - from: "R_out_SW"
+    to: "Alice"
+    mean_snr_db_at20dbm: 8.0
+
+  - from: "Alice"
+    to: "R_out_N"
+    mean_snr_db_at20dbm: 8.0
+  - from: "R_out_N"
+    to: "Alice"
+    mean_snr_db_at20dbm: 8.0

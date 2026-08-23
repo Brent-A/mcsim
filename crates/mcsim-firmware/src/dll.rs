@@ -245,7 +245,7 @@ impl Default for NodeConfig {
             flood_suppress: 1,
             flood_suppress_snr_hi: 9,
             flood_suppress_snr_lo: 0,
-            flood_suppress_delay_x: 2,
+            flood_suppress_delay_x: 3,
             _reserved: [0; 32],
         }
     }
