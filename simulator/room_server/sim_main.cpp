@@ -143,6 +143,15 @@ struct RoomServerSimNode : public SimNodeImpl {
         }
         
         ctx.rtc_clock.tick();
+        // The firmware reads the SimRTCClock it was constructed with (the thread_local
+        // _sim_rtc_instance), while sim_step_begin() advances ctx.rtc_clock and
+        // ctx.current_rtc_secs -- different objects, so the firmware's RTC stays frozen
+        // at initial_rtc. A frozen RTC makes every advert byte-identical (same emitted
+        // timestamp, deterministic signature), so the dedup table eats later copies and
+        // FLOOD adverts can never propagate in the sim. Sync the clock the firmware
+        // actually reads from the coordinator-provided seconds on every step.
+        // (Same fix as simulator/repeater/sim_main.cpp.)
+        _sim_rtc_instance.setCurrentTime(ctx.current_rtc_secs);
     }
     
     const char* getNodeType() const override {

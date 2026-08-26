@@ -1,0 +1,94 @@
+# Whitelist test network: DMs to a client that NEVER checked in must still be delivered.
+#
+#   R1,R2,R3 - repeater triangle (all mutually in range)
+#   WL       - room server behind R1/R2 only (R3 cannot hear it). Its key is
+#              BLACKLISTED on R1+R2 in the behaviors below -- that drops WL's
+#              adverts, which simulates "never checked in" (no attached-client
+#              entry, no reply path). Without protection, flood suppression may
+#              cancel R1's AND R2's rebroadcast of a DM addressed to WL (both
+#              consider their near set covered after overhearing R3), and if only
+#              R3 forwards, WL receives nothing -- the exact starvation case the
+#              whitelist fixes: `whitelist add 05AFAA57` on R1/R2 forces them to
+#              always rebroadcast traffic to (or from) that key.
+#   S        - room server that sends repeated DMs to WL (knows WL via contacts;
+#              no path learned -> every DM is a fresh flood)
+#
+# WL's pinned keypair: pubkey prefix 05AFAA57.
+#
+#   cargo run --release -- run examples/topologies/keyfilter_wl_test.yaml \
+#          examples/behaviors/keyfilter_wl_{on,off}.yaml \
+#          --duration 6m --seed 1 --sequential --output /tmp/trace_wl_{on,off}.json
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+    firmware:
+      startup_time_jitter_s: 5.0
+
+nodes:
+  - name: "R1"
+    location: { lat: 47.6100, lon: -122.3500 }
+    keys: { public_key: "11*" }
+    firmware: { type: Repeater }
+
+  - name: "R2"
+    location: { lat: 47.6140, lon: -122.3460 }
+    keys: { public_key: "22*" }
+    firmware: { type: Repeater }
+
+  - name: "R3"
+    location: { lat: 47.6060, lon: -122.3460 }
+    keys: { public_key: "33*" }
+    firmware: { type: Repeater }
+
+  - name: "R4"
+    location: { lat: 47.6100, lon: -122.3400 }
+    keys: { public_key: "44*" }
+    firmware: { type: Repeater }
+
+  - name: "WL"      # the never-checking-in client
+    location: { lat: 47.6125, lon: -122.3540 }
+    keys:           # pinned pair -> deterministic 4-byte prefix 05AFAA57
+      private_key: "10ed423158cb3d5b13dbb319f80eaff3532664b658da365fe12a83a2e7150b96"
+      public_key: "05afaa5702156ea05d9d5a60cb9303330c13e336630403c0fd9b627ad51e86c3"
+    firmware: { type: RoomServer }
+    room_server: { room_id: "00112233445566778899aabbccddeeff" }
+
+  - name: "S"       # DM sender (Companion firmware: hosts the direct-message agent)
+    location: { lat: 47.6085, lon: -122.3540 }
+    keys: { public_key: "55*" }
+    firmware: { type: Companion }
+    companion:
+      contacts:
+        - "WL"
+
+edges:
+  - { from: "R1", to: "R2", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R2", to: "R1", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R1", to: "R3", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R3", to: "R1", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R2", to: "R3", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R3", to: "R2", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R4", to: "R1", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R1", to: "R4", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R4", to: "R2", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R2", to: "R4", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R4", to: "R3", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R3", to: "R4", mean_snr_db_at20dbm: 15.0 }
+  - { from: "WL", to: "R1", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R1", to: "WL", mean_snr_db_at20dbm: 15.0 }
+  - { from: "WL", to: "R2", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R2", to: "WL", mean_snr_db_at20dbm: 15.0 }
+  - { from: "S", to: "R1", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R1", to: "S", mean_snr_db_at20dbm: 15.0 }
+  - { from: "S", to: "R2", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R2", to: "S", mean_snr_db_at20dbm: 15.0 }
+  - { from: "S", to: "R3", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R3", to: "S", mean_snr_db_at20dbm: 15.0 }
+  - { from: "S", to: "R4", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R4", to: "S", mean_snr_db_at20dbm: 15.0 }

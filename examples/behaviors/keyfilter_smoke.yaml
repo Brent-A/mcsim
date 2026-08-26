@@ -1,0 +1,46 @@
+# CLI smoke test for the key-filter commands: grammar edge cases, hard cap (15),
+# case-insensitivity, and persistence across a reboot (`/prefs.json` round-trip).
+# Run:
+#   cargo run --release -- run examples/topologies/keyfilter_test.yaml \
+#          examples/behaviors/keyfilter_smoke.yaml \
+#          --duration 2m --seed 1 --sequential --output /tmp/trace_smoke.json
+nodes:
+  - name: "GW"
+    cli:
+      commands:                # sent ~2s after firmware start
+        - "blacklist"                  # -none-
+        - "blacklist add F86D26B9"     # OK
+        - "blacklist add F86D26B9"     # Err - already listed
+        - "blacklist add XYZ"          # Err - key must be an 8-hex-char prefix
+        - "blacklist add 0123456789"   # Err - (10 hex chars)
+        - "blacklist add 012345G8"     # Err - bad key
+        - "whitelist add 05AFAA57"     # OK
+        - "whitelist add 05afaa57"     # Err - already listed (case-insensitive)
+        - "whitelist"                  # n=1 05AFAA57
+        - "blacklist del F86D26B9"     # OK
+        - "blacklist del F86D26B9"     # Err - not found
+        - "blacklist remove F86D26B9"  # Err - not found (remove alias)
+        - "blacklist"                  # -none-
+        - "blacklist nonsense"         # Err - usage
+        - "get name"                   # sanity: prefs serializer intact
+      scheduled:               # hard cap + persistence
+        - "@30 blacklist add 01020304"
+        - "@31 blacklist add 05060708"
+        - "@32 blacklist add 090A0B0C"
+        - "@33 blacklist add 0D0E0F10"
+        - "@34 blacklist add 11121314"
+        - "@35 blacklist add 15161718"
+        - "@36 blacklist add 191A1B1C"
+        - "@37 blacklist add 1D1E1F20"
+        - "@38 blacklist add 21222324"
+        - "@39 blacklist add 25262728"
+        - "@40 blacklist add 292A2B2C"
+        - "@41 blacklist add 2D2E2F30"
+        - "@42 blacklist add 31323334"
+        - "@43 blacklist add 35363738"
+        - "@44 blacklist add 393A3B3C" # 15th entry
+        - "@45 blacklist add 3D3E3F40" # Err - full (15)
+        - "@46 blacklist"              # n=15 ...
+        - "@60 reboot"                 # prefs must survive the reboot
+        - "@100 blacklist"             # expect n=15 ... again
+        - "@101 whitelist"             # expect n=1 05AFAA57
