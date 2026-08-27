@@ -8,6 +8,8 @@
 // ============================================================================
 // Implements mesh::MainBoard interface for simulation.
 
+class KeyValueStore;  // forward decl (only used as an opaque no-op argument below)
+
 class SimBoard : public mesh::MainBoard {
 public:
     SimBoard();
@@ -20,6 +22,10 @@ public:
     void reboot() override;
     void powerOff() override;
     uint8_t getStartupReason() const override;
+
+    // Matches the no-op on real board headers (ESP32Board.h etc.): dynamic prefs
+    // have no hardware side effects to simulate.
+    void attachDynamicPrefs(KeyValueStore* prefs) { }
     
     // Simulation state
     bool wasRebootRequested() const { return reboot_requested_; }
