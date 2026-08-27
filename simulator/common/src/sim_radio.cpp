@@ -236,6 +236,34 @@ int SimRadio::getNoiseFloor() const {
     return -120;  // Typical noise floor
 }
 
+void SimRadio::loop() {
+    // Sim stand-in for the hardware channel-health metrics. Sim has no continuous RSSI,
+    // so busy time is the windowed delta of the cumulative airtime counters (TX credited
+    // at startSendRaw, RX credited per dequeued packet in recvRaw - both mutated on this
+    // firmware thread, so per-call deltas are race-free) plus wall time spent transmitting;
+    // deaf time is wall time with the receiver off (== TX window incl. turnaround).
+    if (!g_sim_ctx) return;
+    uint32_t now = static_cast<uint32_t>(g_sim_ctx->current_millis);
+    uint32_t dt = now - last_loop_ms_;
+    last_loop_ms_ = now;
+    bool deaf = !isInRecvMode();
+    uint32_t busy = deaf ? dt : 0;
+    uint32_t air = total_tx_airtime_ + total_rx_airtime_;
+    uint32_t rx_est = air - last_air_;
+    last_air_ = air;
+    if (!deaf) {
+        if (rx_est > dt) rx_est = dt;   // credit at most the elapsed wall time
+        busy += rx_est;
+    }
+    if (busy > dt) busy = dt;
+    busy_win_.add(now, busy);
+    deaf_win_.add(now, deaf ? dt : 0);
+    err_win_.add(now, static_cast<uint16_t>(packets_recv_ - last_recv_cnt_),
+                       static_cast<uint16_t>(packets_recv_errors_ - last_err_cnt_));
+    last_recv_cnt_ = packets_recv_;
+    last_err_cnt_ = packets_recv_errors_;
+}
+
 bool SimRadio::isChannelNoisy() {
     // Sim-only (see header): consume the noise latch one-shot. There is no continuous RSSI in sim,
     // so a strong injected packet (neighbor/interferer on-air) latches noisy and the dwell probe

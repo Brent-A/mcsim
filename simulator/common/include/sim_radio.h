@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Dispatcher.h>
+#include <helpers/WindowedPercent.h>
 #include <queue>
 #include <mutex>
 #include <cstring>
@@ -52,6 +53,10 @@ public:
     float getLastRSSI() const override;
     float getLastSNR() const override;
     int getNoiseFloor() const override;
+    void loop() override;
+    uint8_t getChannelUtilizationPct() override { return busy_win_.pct(); }
+    uint8_t getRxDeafnessPct() override { return deaf_win_.pct(); }
+    uint8_t getRxErrorRatePct() override { return err_win_.badPct(); }
 
     // Non-invasive LBT helpers for the swarm-relay channel-busy check (MyMesh::isResendChannelActive).
     // Sim has no live-RSSI/CAD concept: treat "packets queued" as mid-receive, and the last injected
@@ -151,4 +156,15 @@ private:
     // State
     bool recv_mode_;
     bool channel_noisy_latched_;   // sim-only: set on strong RX injection, consumed one-shot by isChannelNoisy()
+
+    // Windowed channel-health stand-ins (see loop() in the .cpp): sim has no continuous
+    // RSSI, so utilization is approximated from windowed airtime-counter deltas and
+    // deafness from wall time spent with the receiver off (== TX window incl. turnaround).
+    WindowedPercent busy_win_;
+    WindowedPercent deaf_win_;
+    WindowedCountedRatio err_win_;
+    uint32_t last_loop_ms_ = 0;
+    uint32_t last_air_ = 0;         // previous total_tx_airtime_ + total_rx_airtime_
+    uint32_t last_recv_cnt_ = 0;    // previous packets_recv_ (for deltas)
+    uint32_t last_err_cnt_ = 0;     // previous packets_recv_errors_ (for deltas)
 };
