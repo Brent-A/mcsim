@@ -807,6 +807,6 @@ mod tests {
     fn test_opcode_accessors() {
         let cmd = Command::ProposeCorridor { lat: 0, lon: 0, mode: 0 };
         assert_eq!(cmd.code(), CMD_PROPOSE_CORRIDOR);
-        assert_eq!(cmd.code(), 66);
+        assert_eq!(cmd.code(), 67); // moved 66→67, dev v14+ took 66 for CMD_RUN_CLI_COMMAND
     }
 }

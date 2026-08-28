@@ -237,6 +237,7 @@ int SimRadio::getNoiseFloor() const {
 }
 
 void SimRadio::loop() {
+#ifdef SIM_HAS_CHANSTATS
     // Sim stand-in for the hardware channel-health metrics. Sim has no continuous RSSI,
     // so busy time is the windowed delta of the cumulative airtime counters (TX credited
     // at startSendRaw, RX credited per dequeued packet in recvRaw - both mutated on this
@@ -262,6 +263,7 @@ void SimRadio::loop() {
                        static_cast<uint16_t>(packets_recv_errors_ - last_err_cnt_));
     last_recv_cnt_ = packets_recv_;
     last_err_cnt_ = packets_recv_errors_;
+#endif // SIM_HAS_CHANSTATS
 }
 
 bool SimRadio::isChannelNoisy() {

@@ -110,7 +110,8 @@ pub const CMD_GET_STATS: u8 = 56;
 pub const CMD_SEND_CHANNEL_TXT_MSG_CORRIDOR: u8 = 53;
 /// Propose a geo-corridor to a target position (simulator extension).
 /// Note: value 29 also exists as CMD_LOGOUT — different namespaces, no conflict.
-pub const CMD_PROPOSE_CORRIDOR: u8 = 66;
+/// 2026-08-28: moved 66 → 67, upstream dev v14+ took 66 for CMD_RUN_CLI_COMMAND.
+pub const CMD_PROPOSE_CORRIDOR: u8 = 67;
 
 // ============================================================================
 // Stats Sub-types (for CMD_GET_STATS)
@@ -179,7 +180,8 @@ pub const RESP_CODE_TUNING_PARAMS: u8 = 23;
 pub const RESP_CODE_STATS: u8 = 24;
 /// Corridor proposal response (reply to CMD_PROPOSE_CORRIDOR).
 /// Note: value 29 also exists as CMD_LOGOUT in the command namespace — no conflict.
-pub const RESP_CODE_PROPOSE_CORRIDOR: u8 = 29;
+/// 2026-08-28: moved 29 → 30, upstream dev v14+ took 29 for RESP_CODE_CLI_REPLY.
+pub const RESP_CODE_PROPOSE_CORRIDOR: u8 = 30;
 
 // ============================================================================
 // Push Codes (unsolicited firmware → host)

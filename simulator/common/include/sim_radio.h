@@ -1,7 +1,13 @@
 #pragma once
 
 #include <Dispatcher.h>
+// Windowed channel-health stand-ins exist only on channel-stats firmware branches
+// (WindowedPercent.h + the Radio virtuals are that feature's, unmerged in dev). Guard so
+// the sim compiles against any MeshCore checkout (e.g. feature/flood-corridor = plain dev).
+#if __has_include(<helpers/WindowedPercent.h>)
 #include <helpers/WindowedPercent.h>
+#define SIM_HAS_CHANSTATS 1
+#endif
 #include <queue>
 #include <mutex>
 #include <cstring>
@@ -54,9 +60,15 @@ public:
     float getLastSNR() const override;
     int getNoiseFloor() const override;
     void loop() override;
-    uint8_t getChannelUtilizationPct() override { return busy_win_.pct(); }
-    uint8_t getRxDeafnessPct() override { return deaf_win_.pct(); }
-    uint8_t getRxErrorRatePct() override { return err_win_.badPct(); }
+#ifdef SIM_HAS_CHANSTATS
+    // NOTE: no `override` — like isChannelNoisy() below, the base mesh::Radio only declares
+    // these virtuals on channel-stats firmware branches; on others `override` would not
+    // compile. Virtuality is inherited where the base provides it, so omitting `override`
+    // works on both.
+    uint8_t getChannelUtilizationPct() { return busy_win_.pct(); }
+    uint8_t getRxDeafnessPct() { return deaf_win_.pct(); }
+    uint8_t getRxErrorRatePct() { return err_win_.badPct(); }
+#endif
 
     // Non-invasive LBT helpers for the swarm-relay channel-busy check (MyMesh::isResendChannelActive).
     // Sim has no live-RSSI/CAD concept: treat "packets queued" as mid-receive, and the last injected
@@ -157,6 +169,7 @@ private:
     bool recv_mode_;
     bool channel_noisy_latched_;   // sim-only: set on strong RX injection, consumed one-shot by isChannelNoisy()
 
+#ifdef SIM_HAS_CHANSTATS
     // Windowed channel-health stand-ins (see loop() in the .cpp): sim has no continuous
     // RSSI, so utilization is approximated from windowed airtime-counter deltas and
     // deafness from wall time spent with the receiver off (== TX window incl. turnaround).
@@ -167,4 +180,5 @@ private:
     uint32_t last_air_ = 0;         // previous total_tx_airtime_ + total_rx_airtime_
     uint32_t last_recv_cnt_ = 0;    // previous packets_recv_ (for deltas)
     uint32_t last_err_cnt_ = 0;     // previous packets_recv_errors_ (for deltas)
+#endif
 };
