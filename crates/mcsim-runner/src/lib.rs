@@ -29,6 +29,7 @@ pub mod metric_spec;
 pub mod metrics_export;
 mod packet_tracker;
 pub mod parallel_step;
+pub mod parse_duration;
 pub mod realtime;
 pub mod rerun_blueprint;
 pub mod rerun_logger;
