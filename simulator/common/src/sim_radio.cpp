@@ -259,8 +259,11 @@ void SimRadio::loop() {
     if (busy > dt) busy = dt;
     busy_win_.add(now, busy);
     deaf_win_.add(now, deaf ? dt : 0);
-    err_win_.add(now, static_cast<uint16_t>(packets_recv_ - last_recv_cnt_),
-                       static_cast<uint16_t>(packets_recv_errors_ - last_err_cnt_));
+    // events = ALL attempts (decodes + CRC failures), bad = the failures, so the
+    // ratio is errors-per-attempt rather than errors-per-good-decode
+    uint16_t d_ok = static_cast<uint16_t>(packets_recv_ - last_recv_cnt_);
+    uint16_t d_err = static_cast<uint16_t>(packets_recv_errors_ - last_err_cnt_);
+    err_win_.add(now, static_cast<uint16_t>(d_ok + d_err), d_err);
     last_recv_cnt_ = packets_recv_;
     last_err_cnt_ = packets_recv_errors_;
 #endif // SIM_HAS_CHANSTATS

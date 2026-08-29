@@ -67,7 +67,12 @@ public:
     // works on both.
     uint8_t getChannelUtilizationPct() { return busy_win_.pct(); }
     uint8_t getRxDeafnessPct() { return deaf_win_.pct(); }
-    uint8_t getRxErrorRatePct() { return err_win_.badPct(); }
+    void getRxQualityCounts(uint16_t& good, uint16_t& total) {
+        uint16_t ev, bad;
+        err_win_.counts(ev, bad);
+        total = ev;      // all reception attempts
+        good = ev - bad; // ...of which decoded OK
+    }
 #endif
 
     // Non-invasive LBT helpers for the swarm-relay channel-busy check (MyMesh::isResendChannelActive).
