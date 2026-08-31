@@ -180,7 +180,7 @@ private:
     // deafness from wall time spent with the receiver off (== TX window incl. turnaround).
     WindowedPercent busy_win_;
     WindowedPercent deaf_win_;
-    WindowedCountedRatio err_win_;
+    WindowedCountedRatio<60, 10000> err_win_;
     uint32_t last_loop_ms_ = 0;
     uint32_t last_air_ = 0;         // previous total_tx_airtime_ + total_rx_airtime_
     uint32_t last_recv_cnt_ = 0;    // previous packets_recv_ (for deltas)
