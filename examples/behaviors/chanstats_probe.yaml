@@ -1,7 +1,9 @@
 # Channel-stats probes on central repeater R5 of multi_path.yaml with fsupp_floods traffic.
-#   @30  -> before chat/flood traffic starts: expect chan_util_pct:0, rx_deaf_pct:0, rx_err_pct:0
-#   @90/@150/@170 -> during flood forwarding: expect 0..100 values, rx_deaf_pct > 0 in at
-#                    least one probe (R5 transmits within the 5s window), chan_util_pct
+# stats-radio JSON keys (new fields): util = chan utilization %, deaf = RX deafness %,
+# good/tot = RX-quality window counts (err % derivable as 100 - good*100/tot).
+#   @30  -> before chat/flood traffic starts: expect util:0, deaf:0, good == tot (no errors)
+#   @90/@150/@170 -> during flood forwarding: expect 0..100 values, deaf > 0 in at
+#                    least one probe (R5 transmits within the 5s window), util
 #                    bursts above 0 when forwarded traffic lands in-window.
 # Run:
 #   cargo run -- run examples/topologies/multi_path.yaml \

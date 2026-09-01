@@ -265,8 +265,8 @@ void SimRadio::loop() {
     // stations excluded in RadioLibWrapper::recvRaw); the sim stand-in counts
     // ALL failures because packets_recv_errors_ is never incremented in sim
     // (d_err == 0 always) - the SNR filter is structurally unobservable in sim.
-    // The ~10 min window length and the warm-up extrapolation come from the
-    // shared WindowedPercent.h automatically.
+    // The ~10 min window length comes from the shared WindowedPercent.h
+    // automatically.
     uint16_t d_ok = static_cast<uint16_t>(packets_recv_ - last_recv_cnt_);
     uint16_t d_err = static_cast<uint16_t>(packets_recv_errors_ - last_err_cnt_);
     err_win_.add(now, static_cast<uint16_t>(d_ok + d_err), d_err);

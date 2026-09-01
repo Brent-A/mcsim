@@ -65,6 +65,7 @@ public:
     // these virtuals on channel-stats firmware branches; on others `override` would not
     // compile. Virtuality is inherited where the base provides it, so omitting `override`
     // works on both.
+    bool hasChannelHealth() { return true; }
     uint8_t getChannelUtilizationPct() { return busy_win_.pct(); }
     uint8_t getRxDeafnessPct() { return deaf_win_.pct(); }
     void getRxQualityCounts(uint16_t& good, uint16_t& total) {
@@ -72,6 +73,13 @@ public:
         err_win_.counts(ev, bad);
         total = ev;      // all reception attempts
         good = ev - bad; // ...of which decoded OK
+    }
+    bool getRxQualityPct(uint8_t& pct) {
+        uint16_t ev, bad;
+        err_win_.counts(ev, bad);
+        if (ev == 0) { pct = 0; return false; }  // nothing observed yet: no verdict
+        pct = static_cast<uint8_t>(((ev - bad) * 100u) / ev);
+        return true;
     }
 #endif
 
@@ -180,7 +188,7 @@ private:
     // deafness from wall time spent with the receiver off (== TX window incl. turnaround).
     WindowedPercent busy_win_;
     WindowedPercent deaf_win_;
-    WindowedCountedRatio<60, 10000> err_win_;
+    WindowedCountedRatio<> err_win_;
     uint32_t last_loop_ms_ = 0;
     uint32_t last_air_ = 0;         // previous total_tx_airtime_ + total_rx_airtime_
     uint32_t last_recv_cnt_ = 0;    // previous packets_recv_ (for deltas)
