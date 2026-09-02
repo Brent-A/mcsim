@@ -1,0 +1,80 @@
+# DM Corridor-Fallback Network
+# Tests the firmware-internal auto-corridor for contact floods (R2): Alice's DM
+# to Bob has no direct path, so the FIRST flood attempt is scoped by an
+# auto-generated corridor toward Bob's stored position.  The only relay R_off
+# lies ~37 km east of the Alice→Bob axis — outside the Tier-0 diamond
+# (8/20/8 km) — so the corridor attempt is geo-dropped.  Retries (attempt+1,
+# latch window) go as plain floods and deliver.
+#
+# Geometry (Alice→Bob 83 km, Tier-0 diamond on the axis):
+#   Alice (47.2000, -122.4000)  ← sender
+#   Bob   (47.9500, -122.4000)  ← target (contact GPS = real position)
+#   R_off (47.5750, -121.9000)  — 56 km from BOTH, 37.5 km off-axis → drops the
+#                                  corridor attempt, forwards plain floods
+#
+# Expected message flow (see behaviors/corridor_dm_retry.yaml, retries=2):
+#   t=0   attempt 0: corridor flood  → R_off geo-drops
+#   t=5   attempt 1: plain flood     → Bob receives; Bob's PATH+ACK return is
+#                                      ITSELF corridor-scoped (1st attempt) → dropped
+#   t=10  attempt 2: plain flood     → Bob receives; PATH+ACK return now plain
+#                                      (Bob latched) → Alice ACKed
+#
+# Use with examples/behaviors/corridor_dm_retry.yaml:
+#   cargo run -- run examples/topologies/corridor_dm_fallback.yaml \
+#                    examples/behaviors/corridor_dm_retry.yaml --duration 30s
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz:  62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+
+nodes:
+  # ── Companions ────────────────────────────────────────────────────────────
+  - name: "Alice"
+    location:
+      lat:  47.2000
+      lon: -122.4000
+    firmware:
+      type: Companion
+    keys:
+      public_key: "AA*"
+
+  - name: "Bob"
+    location:
+      lat:  47.9500
+      lon: -122.4000
+    firmware:
+      type: Companion
+    keys:
+      public_key: "BB*"
+
+  # ── Relay ──────────────────────────────────────────────────────────────────
+  - name: "R_off"
+    location:
+      lat:  47.5750     # 56 km from Alice and Bob; 37.5 km east of the axis
+      lon: -121.9000
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "01*"
+
+# ── Radio links ──────────────────────────────────────────────────────────────
+# R_off is the ONLY path between Alice and Bob (no direct Alice↔Bob edge).
+edges:
+  - from: "Alice"
+    to: "R_off"
+    mean_snr_db_at20dbm: 10.0
+  - from: "R_off"
+    to: "Alice"
+    mean_snr_db_at20dbm: 10.0
+
+  - from: "R_off"
+    to: "Bob"
+    mean_snr_db_at20dbm: 10.0
+  - from: "Bob"
+    to: "R_off"
+    mean_snr_db_at20dbm: 10.0

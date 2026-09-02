@@ -467,6 +467,16 @@ pub const AGENT_DIRECT_PATH_WARMUP_COUNT: Property<u32, NodeScope> = Property::n
     PropertyDefault::Integer(0),
 );
 
+/// Number of retries of an unacknowledged DM: on ack timeout the same message is
+/// resent with attempt+1 (mirroring the companion app's retry behaviour, which the
+/// firmware's corridor-flood latch keys on — first attempt corridor-scoped, retries
+/// plain flood). 0 = never retry (previous behaviour).
+pub const AGENT_DIRECT_RETRIES: Property<u32, NodeScope> = Property::new(
+    "agent/direct/retries",
+    "Number of retries of an unacknowledged DM, resent with attempt+1 (0 = no retry)",
+    PropertyDefault::Integer(0),
+);
+
 // ============================================================================
 // Agent Login Properties (Node scope)
 // ============================================================================

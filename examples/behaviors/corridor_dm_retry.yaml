@@ -1,0 +1,21 @@
+# Corridor DM Retry Behavior
+#
+# Alice sends 1 DM to Bob and retries unacknowledged attempts up to 2 times
+# (resent with attempt+1, like the companion app).  The firmware scopes the
+# FIRST flood attempt with an auto-corridor toward Bob's position; retries
+# within the latch window go as plain floods.
+#
+# Use with examples/topologies/corridor_dm_fallback.yaml:
+#   cargo run -- run examples/topologies/corridor_dm_fallback.yaml \
+#                    examples/behaviors/corridor_dm_retry.yaml --duration 30s
+
+nodes:
+  - name: "Alice"
+    agent:
+      direct:
+        enabled: true
+        message_count: 1
+        targets:
+          - "Bob"
+        ack_timeout_s: 5.0
+        retries: 2

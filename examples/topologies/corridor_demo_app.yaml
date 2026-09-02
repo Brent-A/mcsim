@@ -1,5 +1,7 @@
 # Geo-Corridor App Demo Network
-# Corridor proposal (opcode 66 → 29) + corridor-scoped channel flood demo.
+# Corridor proposal (opcode 67 → RESP 30) + corridor-scoped channel flood demo
+# (auto-scoping: channel floods carry a 50 km sender circle, contact floods a
+# corridor toward the target's position — both firmware-internal).
 #
 # Connect an external companion app to Alice's UART port and a second app
 # instance (verifier) to Bob's port:

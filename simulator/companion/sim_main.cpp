@@ -109,8 +109,9 @@ struct CompanionSimNode : public SimNodeImpl {
             prefs->max_resend_attempts = config.max_resend_attempts < 6 ? config.max_resend_attempts : 2;
 #endif
 
-            // Propagate geographic position so that corridor proposals (opcode 66)
-            // and adverts carry the location from the topology.  Unlike the
+            // Propagate geographic position so that corridor proposals (opcode 67)
+            // and the firmware-internal auto-corridor scoping carry the location
+            // from the topology.  Unlike the
             // repeater, the companion keeps the live position in sensors.*
             // (MyMesh::begin() already copied the empty prefs there before us).
             prefs->node_lat = config.node_lat;

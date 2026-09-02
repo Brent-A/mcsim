@@ -72,6 +72,11 @@ pub struct DirectMessageConfig {
     /// Each warmup DM triggers path discovery (FLOOD → PATH+ACK → Alice learns DIRECT
     /// route) but is not counted in delivery metrics. 0 = disabled.
     pub path_warmup_count: u32,
+    /// Number of retries of an unacknowledged DM: on ack timeout the same message is
+    /// resent with attempt+1 (mirroring the companion app's retry behaviour — the
+    /// firmware's corridor auto-scoping keys on it: first attempt corridor-scoped,
+    /// retries plain flood). 0 = never retry.
+    pub retries: u32,
 }
 
 impl Default for DirectMessageConfig {
@@ -90,6 +95,7 @@ impl Default for DirectMessageConfig {
             message_count: None,
             shutdown_s: None,
             path_warmup_count: 0,
+            retries: 0,
         }
     }
 }
@@ -544,6 +550,10 @@ pub struct Agent {
     direct_state: DirectMessageState,
     direct_target_idx: usize,
     direct_session_count: u32,
+    // Retry bookkeeping for the outstanding counted DM: attempts already used
+    // (attempt numbers 0..=direct_attempts_used are spent) and what to resend.
+    direct_attempts_used: u32,
+    direct_current: Option<(PublicKeyPrefix, String, u32)>,
     
     // Channel message state
     channel_state: ChannelMessageState,
@@ -636,6 +646,8 @@ impl Agent {
             logins_succeeded: 0,
             logins_failed: 0,
             message_seq: 0,
+            direct_attempts_used: 0,
+            direct_current: None,
             direct_messages_sent: 0,
             channel_messages_sent: 0,
             trace_messages_sent: 0,
@@ -974,6 +986,8 @@ impl Agent {
             &self.metrics_labels.to_labels()
         ).increment(1);
 
+        self.direct_attempts_used = 0;
+        self.direct_current = Some((recipient, content.clone(), timestamp));
         self.send_command(
             ctx,
             &Command::SendTextMessage {
@@ -1012,6 +1026,7 @@ impl Agent {
                 // Only advance if ACK matches the currently-expected counted DM.
                 // A hash of 0 means Response::Sent hasn't arrived yet — ignore.
                 if expected_ack != 0 && expected_ack == ack_hash {
+                    self.direct_current = None;  // acked — nothing left to retry
                     self.schedule_next_direct_or_session(ctx);
                 }
             }
@@ -1029,7 +1044,44 @@ impl Agent {
                 self.advance_warmup_or_start_session(ctx, remaining);
             }
             DirectMessageState::WaitingAck { .. } => {
+                if self.direct_attempts_used < self.config.direct.retries {
+                    // Retry the same DM with attempt+1, like the companion app does — the
+                    // firmware's corridor auto-scoping keys on this: first flood attempt
+                    // corridor-scoped, retries within the latch window plain.
+                    self.direct_attempts_used += 1;
+                    if let Some((recipient, content, timestamp)) = self.direct_current.clone() {
+                        debug!(
+                            "Agent[{}]: Direct message ACK timeout, retrying (attempt {})",
+                            self.config.name, self.direct_attempts_used
+                        );
+                        ctx.tracer().log(TraceEvent::custom(
+                            Some(&self.config.name),
+                            self.id,
+                            ctx.time(),
+                            format!("Retrying DM (attempt {})", self.direct_attempts_used),
+                        ));
+                        mcsim_metrics::metrics::counter!(
+                            metric_defs::MESSAGE_SENT.name,
+                            &self.metrics_labels.to_labels()
+                        ).increment(1);
+                        self.send_command(
+                            ctx,
+                            &Command::SendTextMessage {
+                                text_type: TextType::Plain,
+                                attempt: self.direct_attempts_used as u8,
+                                timestamp,
+                                recipient_prefix: recipient,
+                                text: content,
+                            },
+                        );
+                        self.direct_state = DirectMessageState::WaitingAck { expected_ack: 0 };
+                        let timeout = SimTime::from_secs(self.config.direct.ack_timeout_s);
+                        ctx.post_event(timeout, vec![self.id], EventPayload::Timer { timer_id: TIMER_DIRECT_ACK_TIMEOUT });
+                        return;
+                    }
+                }
                 debug!("Agent[{}]: Direct message ACK timeout", self.config.name);
+                self.direct_current = None;
                 self.schedule_next_direct_or_session(ctx);
             }
             _ => {}

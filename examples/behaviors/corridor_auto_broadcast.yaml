@@ -1,0 +1,17 @@
+# Auto-Corridor Broadcast Behavior
+#
+# Alice sends exactly ONE plain channel message (op 3 — NO corridor config).
+# The firmware attaches the default sender-centered 50 km circle corridor by
+# itself; repeaters outside that circle must drop the packet.
+#
+# Use with examples/topologies/corridor_auto_scope.yaml:
+#   cargo run -- run examples/topologies/corridor_auto_scope.yaml \
+#                    examples/behaviors/corridor_auto_broadcast.yaml \
+#                    --duration 30s
+
+nodes:
+  - name: "Alice"
+    agent:
+      channel:
+        enabled: true
+        message_count: 1
