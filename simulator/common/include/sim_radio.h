@@ -113,6 +113,8 @@ public:
     uint32_t getPacketsRecv() const { return packets_recv_; }
     uint32_t getPacketsSent() const { return packets_sent_; }
     uint32_t getPacketsRecvErrors() const { return packets_recv_errors_; }
+    // no hardware to desync from in the simulator (RX-desync watchdog counter)
+    uint16_t getRxDesyncEvents() const { return 0; }
     void resetStats()
     {
         packets_recv_ = 0;
