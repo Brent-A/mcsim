@@ -325,6 +325,163 @@ impl TransportCodes {
     }
 }
 
+// ============================================================================
+// Corridor Extension
+// ============================================================================
+
+/// Radius lookup table matching C++ CORRIDOR_RADIUS_KM.
+pub const CORRIDOR_RADIUS_KM: [f32; 16] = [
+    1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 30.0,
+    50.0, 80.0, 120.0, 200.0, 300.0, 500.0, 800.0, f32::MAX,
+];
+
+/// Maximum number of corridor triples per packet.
+pub const MAX_CORRIDOR_TRIPLES: usize = 8;
+
+/// Encoded size of one corridor triple on the wire (14-bit lat / 14-bit lon / 4-bit radius).
+pub const CORRIDOR_TRIPLE_BYTES: usize = 4;
+
+/// Error returned when a corridor radius does not match any supported value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorridorRadiusError {
+    /// The requested radius (in km) that is not in the supported set.
+    pub requested_km: f32,
+    /// The nearest supported radius smaller than the requested value, if any.
+    pub lower_km: Option<f32>,
+    /// The nearest supported radius larger than the requested value, if any.
+    /// `None` means the next step would be unlimited (code 15 / `f32::MAX`).
+    pub upper_km: Option<f32>,
+}
+
+impl fmt::Display for CorridorRadiusError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Unsupported corridor radius {} km.", self.requested_km)?;
+        match (self.lower_km, self.upper_km) {
+            (Some(lo), Some(hi)) =>
+                write!(f, " Nearest supported: lower = {} km, upper = {} km.", lo, hi),
+            (Some(lo), None) =>
+                write!(f, " Nearest supported lower: {} km. Above that is unlimited (code 15).", lo),
+            (None, Some(hi)) =>
+                write!(f, " Nearest supported upper: {} km. No smaller value exists.", hi),
+            (None, None) => Ok(()),
+        }
+    }
+}
+
+impl std::error::Error for CorridorRadiusError {}
+
+/// One geo-corridor waypoint (decoded form).
+/// Mirrors C++ `CorridorTriple` in `CorridorCheck.h`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CorridorTriple {
+    /// Latitude in degrees (snapped to 14-bit raster, ~0.011° resolution).
+    pub lat: f32,
+    /// Longitude in degrees (snapped to 14-bit raster, ~0.022° resolution).
+    pub lon: f32,
+    /// Radius in kilometres; must be one of `CORRIDOR_RADIUS_KM`.
+    pub radius_km: f32,
+}
+
+impl CorridorTriple {
+    /// Snap a real-world latitude to the nearest representable 14-bit raster value.
+    /// Resolution: 180 / 16383 ≈ 0.011°.
+    pub fn snap_lat(lat: f32) -> f32 {
+        let norm = ((lat + 90.0) / 180.0).clamp(0.0, 1.0);
+        (norm * 16383.0).round() / 16383.0 * 180.0 - 90.0
+    }
+
+    /// Snap a real-world longitude to the nearest representable 14-bit raster value.
+    /// Resolution: 360 / 16383 ≈ 0.022°.
+    pub fn snap_lon(lon: f32) -> f32 {
+        let norm = ((lon + 180.0) / 360.0).clamp(0.0, 1.0);
+        (norm * 16383.0).round() / 16383.0 * 360.0 - 180.0
+    }
+
+    /// Validate that `radius_km` exactly matches one of the 16 supported values
+    /// (within 0.001 km tolerance). Returns the matching code on success or a
+    /// [`CorridorRadiusError`] with the nearest lower/upper supported values.
+    pub fn exact_radius_code(radius_km: f32) -> Result<u8, CorridorRadiusError> {
+        for (i, &r) in CORRIDOR_RADIUS_KM.iter().enumerate() {
+            let matches = if r == f32::MAX {
+                radius_km == f32::MAX
+            } else {
+                (radius_km - r).abs() < 0.001
+            };
+            if matches {
+                return Ok(i as u8);
+            }
+        }
+        // Collect lower and upper bounds (excluding the unlimited sentinel).
+        let lower = CORRIDOR_RADIUS_KM
+            .iter()
+            .filter(|&&r| r != f32::MAX && r < radius_km)
+            .cloned()
+            .last();
+        let upper = CORRIDOR_RADIUS_KM
+            .iter()
+            .filter(|&&r| r != f32::MAX && r > radius_km)
+            .cloned()
+            .next();
+        Err(CorridorRadiusError { requested_km: radius_km, lower_km: lower, upper_km: upper })
+    }
+
+    /// Create a `CorridorTriple` from real-world coordinates:
+    /// - `lat` and `lon` are snapped to the nearest 14-bit encoding raster;
+    ///   the stored values reflect what will actually be transmitted.
+    /// - `radius_km` must exactly match one of the 16 supported values in
+    ///   `CORRIDOR_RADIUS_KM`; returns [`CorridorRadiusError`] otherwise.
+    pub fn from_real_world(lat: f32, lon: f32, radius_km: f32) -> Result<Self, CorridorRadiusError> {
+        let _ = Self::exact_radius_code(radius_km)?;
+        Ok(CorridorTriple {
+            lat: Self::snap_lat(lat),
+            lon: Self::snap_lon(lon),
+            radius_km,
+        })
+    }
+
+    /// Find the best-fit radius code (0..15) for a given radius in km.
+    /// Prefer `exact_radius_code` to catch unsupported values at configuration time.
+    pub fn radius_code(radius_km: f32) -> u8 {
+        for (i, &r) in CORRIDOR_RADIUS_KM.iter().enumerate() {
+            if radius_km <= r {
+                return i as u8;
+            }
+        }
+        15u8
+    }
+
+    /// Encode into a 32-bit wire word: bits 31-18=lat, 17-4=lon, 3-0=radius_code.
+    /// Lat/lon are 14-bit offset-binary (0..16383 maps to -90..+90 / -180..+180).
+    pub fn encode(&self) -> u32 {
+        let lat_norm = ((self.lat + 90.0) / 180.0).clamp(0.0, 1.0);
+        let lon_norm = ((self.lon + 180.0) / 360.0).clamp(0.0, 1.0);
+        let lat14 = (lat_norm * 16383.0).round() as u32;
+        let lon14 = (lon_norm * 16383.0).round() as u32;
+        let rc = Self::radius_code(self.radius_km) as u32;
+        (lat14 << 18) | (lon14 << 4) | rc
+    }
+
+    /// Decode from a 32-bit wire word.
+    pub fn decode(raw: u32) -> Self {
+        let lat14 = (raw >> 18) & 0x3FFF;
+        let lon14 = (raw >> 4) & 0x3FFF;
+        let rc = (raw & 0x0F) as usize;
+        let lat = (lat14 as f32 / 16383.0) * 180.0 - 90.0;
+        let lon = (lon14 as f32 / 16383.0) * 360.0 - 180.0;
+        CorridorTriple { lat, lon, radius_km: CORRIDOR_RADIUS_KM[rc] }
+    }
+}
+
+/// Extract corridor count from `transport_codes.code2` (bits 15-12).
+pub fn corridor_count(code2: u16) -> u8 {
+    ((code2 >> 12) & 0x0F) as u8
+}
+
+/// Build the `code2` corridor header for N triples (N clamped to MAX_CORRIDOR_TRIPLES).
+pub fn make_corridor_header(n: u8) -> u16 {
+    (n.min(MAX_CORRIDOR_TRIPLES as u8) as u16) << 12
+}
+
 /// Packet header (decoded form).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PacketHeader {
@@ -969,6 +1126,10 @@ pub struct MeshCorePacket {
     pub header: PacketHeader,
     /// Routing path (node hashes).
     pub path: Vec<u8>,
+    /// Flood Corridor region (raw triple bytes, between path and payload).
+    /// Populated only when `transport_codes.code2` carries a triple count N > 0;
+    /// length is then N * CORRIDOR_TRIPLE_BYTES. Empty for non-corridor packets.
+    pub corridor: Vec<u8>,
     /// Packet payload.
     pub payload: PacketPayload,
 }
@@ -978,6 +1139,7 @@ impl Default for MeshCorePacket {
         Self {
             header: PacketHeader::default(),
             path: Vec::new(),
+            corridor: Vec::new(),
             payload: PacketPayload::default(),
         }
     }
@@ -999,6 +1161,7 @@ impl MeshCorePacket {
                 path_len: 0,
             },
             path: Vec::new(),
+            corridor: Vec::new(),
             payload,
         }
     }
@@ -1156,6 +1319,17 @@ impl MeshCorePacket {
 
         if offset > bytes.len() {
             return None;
+        }
+
+        // Skip the Flood Corridor region (between path and payload): code_2 count N > 0
+        // means N×CORRIDOR_TRIPLE_BYTES follow. This keeps the hash over the standard
+        // payload only, matching the C++ calculatePacketHash (which excludes corridor).
+        if route_type.has_transport_codes() {
+            let code2 = u16::from_le_bytes([bytes[3], bytes[4]]);
+            offset += crate::corridor_count(code2) as usize * CORRIDOR_TRIPLE_BYTES;
+            if offset > bytes.len() {
+                return None;
+            }
         }
 
         let payload_data = &bytes[offset..];

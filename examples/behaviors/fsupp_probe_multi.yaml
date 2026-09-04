@@ -1,0 +1,32 @@
+# Teil-B snapshot across ALL repeaters at t=400s to find where coverage populated enough
+# (>=3 near neighbours) for flood suppression to activate. R5 (grid center, 4 equal-SNR
+# neighbours, collision sink for both adverts and floods) is the expected hard case; edge/face
+# repeaters should populate better. Uses block-style YAML (flow style did not merge in earlier).
+nodes:
+  - name: "R1"
+    cli:
+      scheduled: ["@400 neighbors", "@400 get flood.suppress"]
+  - name: "R2"
+    cli:
+      scheduled: ["@400 neighbors", "@400 get flood.suppress"]
+  - name: "R3"
+    cli:
+      scheduled: ["@400 neighbors", "@400 get flood.suppress"]
+  - name: "R4"
+    cli:
+      scheduled: ["@400 neighbors", "@400 get flood.suppress"]
+  - name: "R5"
+    cli:
+      scheduled: ["@400 neighbors", "@400 get flood.suppress"]
+  - name: "R6"
+    cli:
+      scheduled: ["@400 neighbors", "@400 get flood.suppress"]
+  - name: "R7"
+    cli:
+      scheduled: ["@400 neighbors", "@400 get flood.suppress"]
+  - name: "R8"
+    cli:
+      scheduled: ["@400 neighbors", "@400 get flood.suppress"]
+  - name: "R9"
+    cli:
+      scheduled: ["@400 neighbors", "@400 get flood.suppress"]

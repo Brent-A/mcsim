@@ -46,6 +46,31 @@ pub enum Command {
         text: String,
     },
 
+    /// Send a text message to a channel with geo-corridor scope.
+    /// `encoded_triples` contains the 32-bit wire-encoded corridor triples.
+    SendChannelTextMessageWithCorridor {
+        /// Message type (should be Plain).
+        text_type: TextType,
+        /// Channel index.
+        channel_idx: u8,
+        /// Message timestamp.
+        timestamp: u32,
+        /// Message text.
+        text: String,
+        /// Pre-encoded corridor triples (32-bit wire words, max 8).
+        encoded_triples: Vec<u32>,
+    },
+
+    /// Ask the firmware to propose a geo-corridor to a target position.
+    ProposeCorridor {
+        /// Target latitude in microdegrees (1e-6 degrees).
+        lat: i32,
+        /// Target longitude in microdegrees (1e-6 degrees).
+        lon: i32,
+        /// Mode flags: bit 0 = force, bit 1 = denser width preset.
+        mode: u8,
+    },
+
     /// Get the list of contacts.
     GetContacts {
         /// Optional 'since' filter (only return contacts modified after this time).
@@ -327,6 +352,8 @@ impl Command {
             Command::AppStart { .. } => CMD_APP_START,
             Command::SendTextMessage { .. } => CMD_SEND_TXT_MSG,
             Command::SendChannelTextMessage { .. } => CMD_SEND_CHANNEL_TXT_MSG,
+            Command::SendChannelTextMessageWithCorridor { .. } => CMD_SEND_CHANNEL_TXT_MSG_CORRIDOR,
+            Command::ProposeCorridor { .. } => CMD_PROPOSE_CORRIDOR,
             Command::GetContacts { .. } => CMD_GET_CONTACTS,
             Command::GetDeviceTime => CMD_GET_DEVICE_TIME,
             Command::SetDeviceTime { .. } => CMD_SET_DEVICE_TIME,
@@ -417,6 +444,34 @@ impl Command {
                 buf.push(*channel_idx);
                 buf.extend_from_slice(&timestamp.to_le_bytes());
                 buf.extend_from_slice(text.as_bytes());
+            }
+
+            Command::SendChannelTextMessageWithCorridor {
+                text_type,
+                channel_idx,
+                timestamp,
+                text,
+                encoded_triples,
+            } => {
+                buf.push(CMD_SEND_CHANNEL_TXT_MSG_CORRIDOR);
+                buf.push((*text_type).into());
+                buf.push(*channel_idx);
+                buf.extend_from_slice(&timestamp.to_le_bytes());
+                buf.extend_from_slice(text.as_bytes());
+                // Wire format: text | triple0(4) | ... | tripleN-1(4) | count(1)
+                // count byte is at cmd_frame[len-1]; triples at cmd_frame[len-1-n*4..len-1]
+                let n = encoded_triples.len().min(8) as u8;
+                for &word in encoded_triples.iter().take(n as usize) {
+                    buf.extend_from_slice(&word.to_le_bytes());
+                }
+                buf.push(n);
+            }
+
+            Command::ProposeCorridor { lat, lon, mode } => {
+                buf.push(CMD_PROPOSE_CORRIDOR);
+                buf.extend_from_slice(&lat.to_le_bytes());
+                buf.extend_from_slice(&lon.to_le_bytes());
+                buf.push(*mode);
             }
 
             Command::GetContacts { since } => {
@@ -704,5 +759,54 @@ impl Command {
         }
 
         buf
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encode_propose_corridor() {
+        let cmd = Command::ProposeCorridor {
+            lat: 47_610_000,   // 47.61 deg
+            lon: -122_400_000, // -122.4 deg
+            mode: 0b10,
+        };
+        let frame = cmd.encode();
+        assert_eq!(frame[0], CMD_PROPOSE_CORRIDOR);
+        assert_eq!(frame.len(), 10);
+        assert_eq!(&frame[1..5], 47_610_000i32.to_le_bytes());
+        assert_eq!(&frame[5..9], (-122_400_000i32).to_le_bytes());
+        assert_eq!(frame[9], 0b10);
+    }
+
+    #[test]
+    fn test_encode_send_channel_text_with_corridor() {
+        let cmd = Command::SendChannelTextMessageWithCorridor {
+            text_type: TextType::Plain,
+            channel_idx: 1,
+            timestamp: 0x11223344,
+            text: "hi".to_string(),
+            encoded_triples: vec![0x12345678, 0xAABBCCDD],
+        };
+        let frame = cmd.encode();
+        // [op][txt_type][ch_idx][timestamp(4)]["hi"][triple(4)x2][count]
+        assert_eq!(frame.len(), 1 + 1 + 1 + 4 + 2 + 8 + 1);
+        assert_eq!(frame[0], CMD_SEND_CHANNEL_TXT_MSG_CORRIDOR);
+        assert_eq!(frame[1], TXT_TYPE_PLAIN);
+        assert_eq!(frame[2], 1);
+        assert_eq!(&frame[3..7], 0x11223344u32.to_le_bytes());
+        assert_eq!(&frame[7..9], b"hi");
+        assert_eq!(&frame[9..13], 0x12345678u32.to_le_bytes());
+        assert_eq!(&frame[13..17], 0xAABBCCDDu32.to_le_bytes());
+        assert_eq!(frame[17], 2); // count trailer
+    }
+
+    #[test]
+    fn test_opcode_accessors() {
+        let cmd = Command::ProposeCorridor { lat: 0, lon: 0, mode: 0 };
+        assert_eq!(cmd.code(), CMD_PROPOSE_CORRIDOR);
+        assert_eq!(cmd.code(), 67); // moved 66→67, dev v14+ took 66 for CMD_RUN_CLI_COMMAND
     }
 }

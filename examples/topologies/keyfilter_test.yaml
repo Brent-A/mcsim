@@ -1,0 +1,72 @@
+# Key-filter (pubkey blacklist/whitelist) test network.
+#
+#   GW   - repeater under test; the only path between Spam and Far
+#   Spam - room-server "spammer" with a pinned keypair (pubkey prefix F86D26B9);
+#          boosted FLOOD advert rate via scheduled `advert` probes
+#   Far  - repeater that can ONLY hear GW -> whatever it receives from F86D26B9...
+#          was forwarded by GW
+#
+# Each of Spam's adverts is a fresh flood (new timestamp -> new packet hash), and
+# room-server adverts are Tier B (never flood-suppressed) -- so GW forwards every
+# one of them until the sender's prefix is blacklisted on GW.
+#
+# Merge examples/behaviors/keyfilter_bl_{on,off}.yaml for the A/B, e.g.
+#   cargo run --release -- run examples/topologies/keyfilter_test.yaml \
+#          examples/behaviors/keyfilter_bl_on.yaml \
+#          --duration 4m --seed 1 --sequential --output /tmp/trace_bl_on.json
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+    firmware:
+      startup_time_jitter_s: 5.0
+
+nodes:
+  - name: "GW"
+    location:
+      lat: 47.6100
+      lon: -122.3500
+    keys:
+      public_key: "aa*"
+    firmware:
+      type: Repeater
+
+  - name: "Spam"
+    location:
+      lat: 47.6145   # ~0.5 km north of GW
+      lon: -122.3500
+    keys:            # pinned pair -> deterministic 4-byte prefix F86D26B9
+      private_key: "3dab0b387968b7228a375177d37eb5baedf953b7b22023f4c203cbb0e356be8c"
+      public_key: "f86d26b9c44e00700c6579727852d2af29b6b66c1d926eff5b843d26041d48be"
+    firmware:
+      type: RoomServer
+    room_server:
+      room_id: "00112233445566778899aabbccddeeff"
+
+  - name: "Far"
+    location:
+      lat: 47.6055   # ~0.5 km south of GW (1 km from Spam -> out of range)
+      lon: -122.3500
+    keys:
+      public_key: "bb*"
+    firmware:
+      type: Repeater
+
+edges:
+  - from: "GW"
+    to: "Spam"
+    mean_snr_db_at20dbm: 15.0
+  - from: "Spam"
+    to: "GW"
+    mean_snr_db_at20dbm: 15.0
+  - from: "GW"
+    to: "Far"
+    mean_snr_db_at20dbm: 15.0
+  - from: "Far"
+    to: "GW"
+    mean_snr_db_at20dbm: 15.0

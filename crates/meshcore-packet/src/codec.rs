@@ -44,6 +44,9 @@ pub fn encode_packet(packet: &MeshCorePacket) -> Vec<u8> {
     // 4. Path (variable length)
     buf.extend_from_slice(&packet.path);
 
+    // 4b. Flood Corridor region (between path and payload); empty for non-corridor packets.
+    buf.extend_from_slice(&packet.corridor);
+
     // 5. Payload (variable length)
     let payload_bytes = encode_payload(&packet.payload);
     buf.extend_from_slice(&payload_bytes);
@@ -270,6 +273,29 @@ pub fn decode_packet(data: &[u8]) -> Result<MeshCorePacket, PacketError> {
     let path = data[offset..offset + path_len].to_vec();
     offset += path_len;
 
+    // 4b. Flood Corridor region (between path and payload), present when code_2 count > 0.
+    let mut corridor = Vec::new();
+    if header.route_type.has_transport_codes() {
+        if let Some(tc) = &header.transport_codes {
+            let n = crate::corridor_count(tc.code2) as usize;
+            if n > 0 {
+                let clen = n * crate::CORRIDOR_TRIPLE_BYTES;
+                if offset + clen > data.len() {
+                    return Err(PacketError::DecodeError {
+                        offset,
+                        message: format!(
+                            "Not enough data for corridor region: need {} bytes, have {}",
+                            clen,
+                            data.len() - offset
+                        ),
+                    });
+                }
+                corridor = data[offset..offset + clen].to_vec();
+                offset += clen;
+            }
+        }
+    }
+
     // 5. Payload (rest of packet)
     let payload_data = &data[offset..];
     if payload_data.len() > MAX_PACKET_PAYLOAD {
@@ -288,6 +314,7 @@ pub fn decode_packet(data: &[u8]) -> Result<MeshCorePacket, PacketError> {
     Ok(MeshCorePacket {
         header,
         path,
+        corridor,
         payload,
     })
 }
@@ -681,9 +708,11 @@ mod tests {
     fn test_transport_codes() {
         let mut packet = MeshCorePacket::ack(0xAAAA);
         packet.header.route_type = RouteType::TransportFlood;
+        // code2 bits 15-12 are reserved for the Flood Corridor triple count, so a
+        // non-corridor transport flood must keep them 0 (use only the low 12 bits).
         packet.header.transport_codes = Some(TransportCodes {
             code1: 0x1234,
-            code2: 0x5678,
+            code2: 0x0678,
         });
 
         let encoded = encode_packet(&packet);
@@ -692,7 +721,35 @@ mod tests {
         assert_eq!(decoded.header.route_type, RouteType::TransportFlood);
         let codes = decoded.header.transport_codes.unwrap();
         assert_eq!(codes.code1, 0x1234);
-        assert_eq!(codes.code2, 0x5678);
+        assert_eq!(codes.code2, 0x0678);
+        assert!(decoded.corridor.is_empty());
+    }
+
+    #[test]
+    fn test_transport_codes_with_corridor() {
+        let mut packet = MeshCorePacket::ack(0xAAAA);
+        packet.header.route_type = RouteType::TransportFlood;
+        packet.header.transport_codes = Some(TransportCodes {
+            code1: 0x1234,
+            code2: crate::make_corridor_header(3),  // 3 triples → code2 bits 15-12 = 3
+        });
+        // 3 encoded triples (12 bytes) carried in the corridor region between path and payload.
+        let corridor = vec![
+            0xDE, 0xAD, 0xBE, 0xEF,
+            0x01, 0x02, 0x03, 0x04,
+            0xAA, 0xBB, 0xCC, 0xDD,
+        ];
+        packet.corridor = corridor.clone();
+
+        let encoded = encode_packet(&packet);
+        let decoded = decode_packet(&encoded).unwrap();
+
+        assert_eq!(decoded.header.route_type, RouteType::TransportFlood);
+        let codes = decoded.header.transport_codes.unwrap();
+        assert_eq!(codes.code1, 0x1234);
+        assert_eq!(crate::corridor_count(codes.code2), 3);
+        assert_eq!(decoded.corridor.len(), 3 * crate::CORRIDOR_TRIPLE_BYTES);
+        assert_eq!(decoded.corridor, corridor);
     }
 
     #[test]

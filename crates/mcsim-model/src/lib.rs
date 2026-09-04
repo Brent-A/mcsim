@@ -33,19 +33,32 @@ pub use properties::{
     AGENT_DIRECT_ENABLED, AGENT_DIRECT_STARTUP_S, AGENT_DIRECT_STARTUP_JITTER_S, AGENT_DIRECT_TARGETS,
     AGENT_DIRECT_INTERVAL_S, AGENT_DIRECT_INTERVAL_JITTER_S, AGENT_DIRECT_ACK_TIMEOUT_S,
     AGENT_DIRECT_SESSION_MESSAGE_COUNT, AGENT_DIRECT_SESSION_INTERVAL_S, AGENT_DIRECT_SESSION_INTERVAL_JITTER_S,
-    AGENT_DIRECT_MESSAGE_COUNT, AGENT_DIRECT_SHUTDOWN_S,
+    AGENT_DIRECT_MESSAGE_COUNT, AGENT_DIRECT_SHUTDOWN_S, AGENT_DIRECT_PATH_WARMUP_COUNT,
+    AGENT_DIRECT_RETRIES,
+    AGENT_TRACE_ENABLED, AGENT_TRACE_STARTUP_S, AGENT_TRACE_STARTUP_JITTER_S, AGENT_TRACE_TARGETS,
+    AGENT_TRACE_INTERVAL_S, AGENT_TRACE_INTERVAL_JITTER_S, AGENT_TRACE_RESPONSE_TIMEOUT_S,
+    AGENT_TRACE_MESSAGE_COUNT, AGENT_TRACE_SHUTDOWN_S, AGENT_TRACE_TAG, AGENT_TRACE_AUTH, AGENT_TRACE_FLAGS,
+    AGENT_LOGIN_ENABLED, AGENT_LOGIN_STARTUP_S, AGENT_LOGIN_STARTUP_JITTER_S, AGENT_LOGIN_TARGETS,
+    AGENT_LOGIN_PASSWORD, AGENT_LOGIN_RESPONSE_TIMEOUT_S, AGENT_LOGIN_INTERVAL_S,
+    AGENT_LOGIN_INTERVAL_JITTER_S, AGENT_LOGIN_MAX_ATTEMPTS, AGENT_LOGIN_REPEAT_LOGIN_S,
+    AGENT_APP_CLOCK_OFFSET_S,
     AGENT_CHANNEL_ENABLED, AGENT_CHANNEL_STARTUP_S, AGENT_CHANNEL_STARTUP_JITTER_S, AGENT_CHANNEL_TARGETS,
     AGENT_CHANNEL_INTERVAL_S, AGENT_CHANNEL_INTERVAL_JITTER_S,
     AGENT_CHANNEL_SESSION_MESSAGE_COUNT, AGENT_CHANNEL_SESSION_INTERVAL_S, AGENT_CHANNEL_SESSION_INTERVAL_JITTER_S,
-    AGENT_CHANNEL_MESSAGE_COUNT, AGENT_CHANNEL_SHUTDOWN_S,
+    AGENT_CHANNEL_MESSAGE_COUNT, AGENT_CHANNEL_SHUTDOWN_S, AGENT_CHANNEL_CORRIDOR,
     // CLI properties
-    CLI_PASSWORD, CLI_COMMANDS,
+    CLI_PASSWORD, CLI_COMMANDS, CLI_SCHEDULED,
     // Agent config types
-    AgentConfig, DirectMessageConfig, ChannelMessageConfig,
+    AgentConfig, DirectMessageConfig, ChannelMessageConfig, TraceMessageConfig,
     LINK_MEAN_SNR_DB_AT20DBM, LINK_SNR_STD_DEV, LINK_RSSI_DBM,
     LOCATION_LATITUDE, LOCATION_LONGITUDE, LOCATION_ALTITUDE_M,
     SIMULATION_DURATION_S, SIMULATION_SEED, SIMULATION_UART_BASE_PORT,
     FIRMWARE_TYPE, FIRMWARE_UART_PORT, FIRMWARE_STARTUP_TIME_S, FIRMWARE_STARTUP_JITTER_S,
+    FIRMWARE_MAX_RESEND_ATTEMPTS,
+    FIRMWARE_DIRECT_SWARM_FWD,
+    FIRMWARE_SWARM_RELAY_SNR_A, FIRMWARE_SWARM_RELAY_SNR_B,
+    FIRMWARE_FLOOD_SUPPRESS, FIRMWARE_FLOOD_SUPPRESS_SNR_HI,
+    FIRMWARE_FLOOD_SUPPRESS_SNR_LO, FIRMWARE_FLOOD_SUPPRESS_DELAY_X,
     KEYS_PRIVATE_KEY, KEYS_PUBLIC_KEY,
     METRICS_GROUPS, METRICS_WARMUP_S, ROOM_SERVER_ROOM_ID,
     // Firmware simulation properties
@@ -62,6 +75,7 @@ pub use properties::{
 
 use mcsim_common::{EntityId, EntityRegistry, Event, EventPayload, GeoCoord, NodeId, SimTime};
 use mcsim_lora::{LinkModel, RadioParams};
+use meshcore_packet::CorridorTriple;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -519,6 +533,8 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
     let mut node_name_to_agent_id: std::collections::BTreeMap<String, EntityId> = std::collections::BTreeMap::new();
     let mut node_name_to_cli_agent_id: std::collections::BTreeMap<String, EntityId> = std::collections::BTreeMap::new();
     let mut node_name_to_firmware_type: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    // Node name -> (latitude, longitude) in decimal degrees, for pre-seeding contact positions.
+    let mut node_name_to_location: std::collections::BTreeMap<String, (f64, f64)> = std::collections::BTreeMap::new();
     // Map from node name to computed firmware startup time (with jitter applied)
     let mut node_name_to_firmware_startup_time: std::collections::BTreeMap<String, SimTime> = std::collections::BTreeMap::new();
     
@@ -552,7 +568,8 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         if is_repeater || is_room_server {
             let cli_password: Option<String> = node.properties().get(&CLI_PASSWORD);
             let cli_commands: Vec<String> = node.properties().get(&CLI_COMMANDS);
-            if cli_password.is_some() || !cli_commands.is_empty() {
+            let cli_scheduled: Vec<String> = node.properties().get(&CLI_SCHEDULED);
+            if cli_password.is_some() || !cli_commands.is_empty() || !cli_scheduled.is_empty() {
                 let cli_agent_id = EntityId::new(next_entity_id);
                 next_entity_id += 1;
                 node_name_to_cli_agent_id.insert(node.name.clone(), cli_agent_id);
@@ -607,6 +624,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
             longitude: resolved.get(&properties::LOCATION_LONGITUDE),
             altitude_m: resolved.get(&properties::LOCATION_ALTITUDE_M),
         };
+        node_name_to_location.insert(node.name.clone(), (position.latitude, position.longitude));
         let radio_config = mcsim_lora::RadioConfig {
             params: radio_params,
             rx_to_tx_turnaround: SimTime::from_micros(100),
@@ -662,6 +680,16 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                         encryption_key: None,
                         rng_seed: node_rng_seed,
                     },
+                    node_lat: position.latitude,
+                    node_lon: position.longitude,
+                    max_resend_attempts: resolved.get(&FIRMWARE_MAX_RESEND_ATTEMPTS),
+                    direct_swarm_fwd: resolved.get(&FIRMWARE_DIRECT_SWARM_FWD) as u8,
+                    swarm_relay_snr_a: resolved.get(&FIRMWARE_SWARM_RELAY_SNR_A),
+                    swarm_relay_snr_b: resolved.get(&FIRMWARE_SWARM_RELAY_SNR_B),
+                    flood_suppress: resolved.get(&FIRMWARE_FLOOD_SUPPRESS),
+                    flood_suppress_snr_hi: resolved.get(&FIRMWARE_FLOOD_SUPPRESS_SNR_HI),
+                    flood_suppress_snr_lo: resolved.get(&FIRMWARE_FLOOD_SUPPRESS_SNR_LO),
+                    flood_suppress_delay_x: resolved.get(&FIRMWARE_FLOOD_SUPPRESS_DELAY_X),
                 };
                 let mut firmware = RepeaterFirmware::with_sim_params(firmware_id, fw_config, radio_id, node.name.clone(), &node_firmware_sim_params)?;
                 
@@ -705,6 +733,9 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                         encryption_key: None,
                         rng_seed: node_rng_seed,
                     },
+                    node_lat: position.latitude,
+                    node_lon: position.longitude,
+                    max_resend_attempts: resolved.get(&FIRMWARE_MAX_RESEND_ATTEMPTS),
                 };
                 let firmware = CompanionFirmware::with_sim_params(firmware_id, fw_config, radio_id, agent_id, node.name.clone(), &node_firmware_sim_params)?;
                 entities.register(Box::new(firmware));
@@ -754,6 +785,7 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
                         rng_seed: node_rng_seed,
                     },
                     room_id,
+                    max_resend_attempts: resolved.get(&FIRMWARE_MAX_RESEND_ATTEMPTS),
                 };
                 
                 let mut firmware = RoomServerFirmware::with_sim_params(firmware_id, fw_config, radio_id, node.name.clone(), &node_firmware_sim_params)?;
@@ -807,7 +839,10 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         let props = node_config.properties();
         let direct_enabled: bool = props.get(&AGENT_DIRECT_ENABLED);
         let channel_enabled: bool = props.get(&AGENT_CHANNEL_ENABLED);
-        
+        let trace_enabled: bool = props.get(&AGENT_TRACE_ENABLED);
+        let login_enabled: bool = props.get(&AGENT_LOGIN_ENABLED);
+        let app_clock_offset_secs: f64 = props.get(&AGENT_APP_CLOCK_OFFSET_S);
+
         let firmware_id = *node_name_to_firmware_id.get(&node_config.name).unwrap();
         let node_id = *node_name_to_node_id.get(&node_config.name).unwrap();
 
@@ -847,10 +882,16 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         // 
         // Helper to create contact with correct type based on firmware type
         let make_contact = |name: &str, node_id: NodeId| -> mcsim_agents::ContactTarget {
-            match node_name_to_firmware_type.get(name).map(|s| s.as_str()) {
+            let target = match node_name_to_firmware_type.get(name).map(|s| s.as_str()) {
                 Some("repeater") => mcsim_agents::ContactTarget::repeater(name.to_string(), node_id),
                 Some("room_server") | Some("roomserver") => mcsim_agents::ContactTarget::room_server(name.to_string(), node_id),
                 _ => mcsim_agents::ContactTarget::chat(name.to_string(), node_id),
+            };
+            // Pre-seed the contact position (microdegrees) from the node's location,
+            // so contact-position-based firmware features work from sim start.
+            match node_name_to_location.get(name) {
+                Some(&(lat, lon)) => target.with_gps((lat * 1e6).round() as i32, (lon * 1e6).round() as i32),
+                None => target,
             }
         };
         
@@ -909,6 +950,35 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
             session_interval_jitter_s: props.get(&AGENT_DIRECT_SESSION_INTERVAL_JITTER_S),
             message_count: props.get(&AGENT_DIRECT_MESSAGE_COUNT),
             shutdown_s: props.get(&AGENT_DIRECT_SHUTDOWN_S),
+            path_warmup_count: props.get(&AGENT_DIRECT_PATH_WARMUP_COUNT),
+            retries: props.get(&AGENT_DIRECT_RETRIES),
+        };
+
+        // Build login config
+        // agent/login/targets - server nodes to log in to.
+        // If null, auto-derive all repeater / room-server nodes in the topology.
+        let login_target_names: Option<Vec<String>> = props.get(&AGENT_LOGIN_TARGETS);
+        let login_target_ids: Vec<NodeId> = match login_target_names {
+            Some(names) => names.iter()
+                .filter_map(|name| node_name_to_node_id.get(name).copied())
+                .collect(),
+            None => node_name_to_firmware_type.iter()
+                .filter(|(_, t)| **t == "repeater" || **t == "room_server")
+                .filter_map(|(name, _)| node_name_to_node_id.get(name).copied())
+                .collect(),
+        };
+
+        let login_config = mcsim_agents::LoginConfig {
+            enabled: login_enabled,
+            startup_s: props.get(&AGENT_LOGIN_STARTUP_S),
+            startup_jitter_s: props.get(&AGENT_LOGIN_STARTUP_JITTER_S),
+            targets: login_target_ids,
+            password: props.get(&AGENT_LOGIN_PASSWORD),
+            response_timeout_s: props.get(&AGENT_LOGIN_RESPONSE_TIMEOUT_S),
+            interval_s: props.get(&AGENT_LOGIN_INTERVAL_S),
+            interval_jitter_s: props.get(&AGENT_LOGIN_INTERVAL_JITTER_S),
+            max_attempts: props.get(&AGENT_LOGIN_MAX_ATTEMPTS),
+            repeat_login_s: props.get(&AGENT_LOGIN_REPEAT_LOGIN_S),
         };
 
         // Build channel message config
@@ -949,13 +1019,96 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
             session_interval_jitter_s: props.get(&AGENT_CHANNEL_SESSION_INTERVAL_JITTER_S),
             message_count: props.get(&AGENT_CHANNEL_MESSAGE_COUNT),
             shutdown_s: props.get(&AGENT_CHANNEL_SHUTDOWN_S),
+            corridor: {
+                let corridor_strs: Vec<String> = props.get(&AGENT_CHANNEL_CORRIDOR);
+                let mut triples = Vec::with_capacity(corridor_strs.len());
+                for s in &corridor_strs {
+                    let parts: Vec<&str> = s.splitn(3, ',').collect();
+                    if parts.len() != 3 {
+                        return Err(ModelError::InvalidConfig(format!(
+                            "Node '{}': corridor entry '{}' must be formatted as 'lat,lon,radius_km'",
+                            node_config.name, s
+                        )));
+                    }
+                    let lat = parts[0].trim().parse::<f32>().map_err(|_| ModelError::InvalidConfig(
+                        format!("Node '{}': corridor entry '{}': invalid latitude '{}'",
+                            node_config.name, s, parts[0].trim())))?;
+                    let lon = parts[1].trim().parse::<f32>().map_err(|_| ModelError::InvalidConfig(
+                        format!("Node '{}': corridor entry '{}': invalid longitude '{}'",
+                            node_config.name, s, parts[1].trim())))?;
+                    let radius_km = parts[2].trim().parse::<f32>().map_err(|_| ModelError::InvalidConfig(
+                        format!("Node '{}': corridor entry '{}': invalid radius '{}'",
+                            node_config.name, s, parts[2].trim())))?;
+                    let triple = CorridorTriple::from_real_world(lat, lon, radius_km)
+                        .map_err(|e| ModelError::InvalidConfig(
+                            format!("Node '{}': corridor entry '{}': {}", node_config.name, s, e)))?
+                    ;
+                    // Warn if lat/lon were snapped to the encoding raster.
+                    let snap_lat_delta = (triple.lat - lat).abs();
+                    let snap_lon_delta = (triple.lon - lon).abs();
+                    if snap_lat_delta > 1e-4 || snap_lon_delta > 1e-4 {
+                        log::warn!(
+                            "Node '{}': corridor lat/lon ({}, {}) snapped to raster ({}, {}) \
+                             [delta: {:.6}°, {:.6}°]",
+                            node_config.name, lat, lon, triple.lat, triple.lon,
+                            snap_lat_delta, snap_lon_delta
+                        );
+                    }
+                    triples.push(triple);
+                }
+                triples
+            },
+        };
+
+        // Build TRACE config
+        // agent/trace/targets is a list of node names. Resolve each to a NodeId and
+        // append the first N bytes of its public key to the path, where N is determined
+        // by flags & 0x03: 0->1, 1->2, 2->4, 3->8 bytes per hop.
+        let trace_target_names: Vec<String> = props.get(&AGENT_TRACE_TARGETS);
+        let trace_flags: u8 = props.get(&AGENT_TRACE_FLAGS);
+        let hash_size = 1usize << (trace_flags & 0x03);
+        let mut trace_path: Vec<u8> = Vec::new();
+        for name in &trace_target_names {
+            if let Some(target_id) = node_name_to_node_id.get(name) {
+                if hash_size <= target_id.0.len() {
+                    trace_path.extend_from_slice(&target_id.0[..hash_size]);
+                } else {
+                    return Err(ModelError::InvalidConfig(format!(
+                        "Node '{}': TRACE hash_size {} exceeds public key length for target '{}'",
+                        node_config.name, hash_size, name
+                    )));
+                }
+            } else {
+                return Err(ModelError::InvalidConfig(format!(
+                    "Node '{}': TRACE target '{}' not found",
+                    node_config.name, name
+                )));
+            }
+        }
+
+        let trace_config = mcsim_agents::TraceConfig {
+            enabled: trace_enabled,
+            startup_s: props.get(&AGENT_TRACE_STARTUP_S),
+            startup_jitter_s: props.get(&AGENT_TRACE_STARTUP_JITTER_S),
+            path: trace_path,
+            interval_s: props.get(&AGENT_TRACE_INTERVAL_S),
+            interval_jitter_s: props.get(&AGENT_TRACE_INTERVAL_JITTER_S),
+            response_timeout_s: props.get(&AGENT_TRACE_RESPONSE_TIMEOUT_S),
+            message_count: props.get(&AGENT_TRACE_MESSAGE_COUNT),
+            shutdown_s: props.get(&AGENT_TRACE_SHUTDOWN_S),
+            tag: props.get(&AGENT_TRACE_TAG),
+            auth: props.get(&AGENT_TRACE_AUTH),
+            flags: trace_flags,
         };
 
         let agent_config = mcsim_agents::AgentConfig {
             name: node_config.name.clone(),
             direct: direct_config,
             channel: channel_config,
+            trace: trace_config,
+            login: login_config,
             contacts,
+            app_clock_offset_secs,
         };
 
         let agent = mcsim_agents::Agent::new(agent_id, agent_config, node_id, firmware_id);
@@ -990,17 +1143,20 @@ pub fn build_simulation(model: &Model, seed: u64) -> Result<BuiltSimulation, Mod
         // Build CLI agent config
         let cli_password: Option<String> = props.get(&CLI_PASSWORD);
         let cli_commands: Vec<String> = props.get(&CLI_COMMANDS);
+        let cli_scheduled: Vec<String> = props.get(&CLI_SCHEDULED);
 
         let cli_agent_config = mcsim_agents::CliAgentConfig {
             name: node_config.name.clone(),
             password: cli_password,
             commands: cli_commands,
+            scheduled: cli_scheduled,
         };
 
         log::debug!(
-            "Creating CliAgent for '{}' with {} commands",
+            "Creating CliAgent for '{}' with {} commands, {} scheduled probes",
             node_config.name,
-            cli_agent_config.commands.len()
+            cli_agent_config.commands.len(),
+            cli_agent_config.scheduled.len()
         );
 
         let cli_agent = mcsim_agents::CliAgent::new(cli_agent_id, cli_agent_config, node_id, firmware_id);

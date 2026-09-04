@@ -1,0 +1,34 @@
+# Whitelist ON: like keyfilter_wl_off.yaml, but R1+R2 additionally whitelist WL's
+# key at t=60 -- they must now rebroadcast every DM addressed to WL (dest hash 05),
+# so delivery no longer depends on winning the suppression race.
+nodes:
+  - name: "R1"
+    cli:
+      scheduled:
+        - "@30 blacklist add 05AFAA57"
+        - "@60 whitelist add 05AFAA57"
+        - "@63 whitelist"
+        - "@245 clients"
+        - "@350 get flood.suppress"
+  - name: "R2"
+    cli:
+      scheduled:
+        - "@30 blacklist add 05AFAA57"
+        - "@60 whitelist add 05AFAA57"
+        - "@63 whitelist"
+        - "@245 clients"
+        - "@350 get flood.suppress"
+  - name: "R3"
+    cli:
+      scheduled:
+        - "@245 clients"
+        - "@350 get flood.suppress"
+  - name: "S"
+    agent:
+      direct:
+        enabled: true
+        startup_s: 150
+        interval_s: 3
+        targets:
+          - "WL"
+        message_count: 12

@@ -1,0 +1,28 @@
+# Dwell/Interference smoke-test behavior
+# Alice sends direct messages to Bob over the R1->R2->R3 chain (path_warmup_count=1 so the
+# counted session uses the DIRECT route where resends + the stagger matter). The Interferer
+# broadcasts on the channel every few seconds, injecting on-channel energy at every relay to
+# drive the quiet-dwell gate.
+#
+# Use with examples/topologies/dwell_chain.yaml.
+
+nodes:
+  - name: "Alice"
+    agent:
+      direct:
+        enabled: true
+        message_count: 100
+        session_message_count: 1
+        startup_s: 90
+        session_interval_s: 10
+        path_warmup_count: 1
+        targets:
+          - "Bob"
+
+  - name: "Interferer"
+    agent:
+      channel:
+        enabled: true
+        startup_s: 60
+        interval_s: 3
+        message_count: 400

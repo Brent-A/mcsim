@@ -1,0 +1,42 @@
+# Dense 3-repeater TRIANGLE for flood-suppression-coverage verification.
+# All 3 repeaters are pairwise in range (strong, symmetric ~15 dB) -> each one's
+# near set is the other two, and the remaining pair is mutually reachable. This is
+# the minimal topology where the ACTIVE TRACE coverage measurement MUST populate the
+# reach graph (unlike the triangle-free multi_path grid). 3 nodes (not 4) keeps the
+# all-hears-all collision surface small enough for round-trip TRACEs to complete.
+#
+#   cargo run -- run examples/topologies/fsupp_clique.yaml \
+#                  examples/topologies/fsupp_on.yaml \
+#                  examples/behaviors/fsupp_clique_probe.yaml \
+#                  --duration 400s --seed 1 --sequential --output /tmp/clique.json --trace "R1"
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+    firmware:
+      startup_time_jitter_s: 20.0   # spread boot times -> first adverts/measurements desync
+
+nodes:
+  - name: "R1"
+    location: { lat: 47.6100, lon: -122.3500 }
+    firmware: { type: Repeater }
+  - name: "R2"
+    location: { lat: 47.6101, lon: -122.3501 }
+    firmware: { type: Repeater }
+  - name: "R3"
+    location: { lat: 47.6100, lon: -122.3502 }
+    firmware: { type: Repeater }
+
+edges:
+  # all 3 pairs, both directions, strong & symmetric
+  - { from: "R1", to: "R2", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R2", to: "R1", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R1", to: "R3", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R3", to: "R1", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R2", to: "R3", mean_snr_db_at20dbm: 15.0 }
+  - { from: "R3", to: "R2", mean_snr_db_at20dbm: 15.0 }

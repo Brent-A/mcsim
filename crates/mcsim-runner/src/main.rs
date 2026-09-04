@@ -442,6 +442,15 @@ pub struct RunnerConfig {
     #[arg(short, long)]
     pub verbose: bool,
 
+    /// Disable parallel firmware stepping (run nodes sequentially).
+    ///
+    /// Parallel stepping skips the dedicated SERIAL_TX trace line and the forwarding of serial
+    /// replies to the CliAgent, so scheduled CLI probes (cli/scheduled) and their "CLI probe
+    /// complete:" attribution are only captured with --sequential. Use this when inspecting
+    /// runtime CLI output (clients/reach/stats). Slower, but deterministic and complete.
+    #[arg(long)]
+    pub sequential: bool,
+
     /// Trace specific entities. Comma-separated list of entity names or "entity:ID" for IDs.
     /// Use "*" to trace all entities.
     /// Examples: --trace "Alice,Bob" or --trace "entity:1,entity:2" or --trace "*"
@@ -818,6 +827,15 @@ pub fn run_simulation(config: RunnerConfig) -> Result<SimulationStats, RunnerErr
         rerun_logger,
         entity_tracer,
     );
+
+    // Sequential mode: disable parallel stepping so scheduled CLI probes' serial replies are
+    // fully traced (SERIAL_TX line) and forwarded to the CliAgent for attribution.
+    if config.sequential {
+        event_loop.set_parallel_stepping(false);
+        if config.verbose {
+            eprintln!("Parallel stepping disabled (--sequential)");
+        }
+    }
 
     // Configure packet tracker eviction from model properties
     let eviction_age: Option<f64> = model.simulation_properties().get(&mcsim_model::PACKET_TRACKER_EVICTION_AGE_S);
@@ -1580,6 +1598,7 @@ mod tests {
             output: None,
             uart_base_port: 9000,
             rerun: false,
+            sequential: false,
             verbose: false,
             trace: None,
             metrics_output: None,
@@ -1604,6 +1623,7 @@ mod tests {
             output: None,
             uart_base_port: 9000,
             rerun: false,
+            sequential: false,
             verbose: false,
             trace: None,
             metrics_output: None,
@@ -1628,6 +1648,7 @@ mod tests {
             output: None,
             uart_base_port: 9000,
             rerun: false,
+            sequential: false,
             verbose: false,
             trace: None,
             metrics_output: None,
@@ -1653,6 +1674,7 @@ mod tests {
             output: None,
             uart_base_port: 9000,
             rerun: false,
+            sequential: false,
             verbose: false,
             trace: None,
             metrics_output: Some(MetricsOutputFormat::Json),
@@ -1681,6 +1703,7 @@ mod tests {
             output: None,
             uart_base_port: 9000,
             rerun: false,
+            sequential: false,
             verbose: false,
             trace: None,
             metrics_output: None,

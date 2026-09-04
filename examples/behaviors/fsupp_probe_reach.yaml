@@ -1,0 +1,21 @@
+# Teil-B reach follow-up on R5 (multi_path). After neighbours populate (4 by ~200s), query the
+# DIRECTED reach graph for each known neighbour hash. If reach edges are empty, that explains why
+# flood suppression stays 0%: allNearNeighboursCovered can't infer non-forwarding neighbours as
+# covered, so coverage never completes. Hashes are the 4 neighbour prefixes seen at @400 (seed 1,
+# deterministic). Also re-queries clients + suppression for a complete snapshot.
+#
+#   cargo run -- run examples/topologies/multi_path.yaml \
+#                  examples/topologies/fsupp_on.yaml \
+#                  examples/behaviors/fsupp_floods.yaml \
+#                  examples/behaviors/fsupp_probe_reach.yaml \
+#                  --duration 420s --seed 1 --sequential --output /tmp/trace_b2.json --trace "R5"
+nodes:
+  - name: "R5"
+    cli:
+      scheduled:
+        - "@400 reach 134E7963"   # R4
+        - "@400 reach CC6DBF9D"   # R6
+        - "@400 reach 2CB65EF7"   # R8
+        - "@400 reach 2502D397"   # R2
+        - "@400 clients"
+        - "@400 get flood.suppress"

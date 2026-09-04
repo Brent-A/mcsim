@@ -125,6 +125,7 @@ struct SimNodeImpl {
             
             // Reset per-step loop iteration counter
             ctx.spin_config.loop_iterations_this_step = 0;
+            ctx.spin_config.spin_yield_requested = false;
             
             // Double-loop idle detection:
             // Run the loop until we get two consecutive iterations without output,
@@ -198,11 +199,16 @@ struct SimNodeImpl {
                 // Clear expired wake times
                 ctx.wake_registry.clearExpired(ctx.current_millis);
                 
-                // Idle - use wake time registry if available, otherwise default
+                // Idle - use wake time registry if available, otherwise default.
+                // NOTE: next_wake (from futureMillis/wake_registry) takes priority over
+                // spin_yield_requested. spin_yield_requested is only used as a fallback
+                // when no scheduled wake time exists, preventing loss of queued re-sends.
                 ctx.step_result.reason = SIM_YIELD_IDLE;
                 uint64_t next_wake = ctx.wake_registry.getNextWakeTime();
                 if (next_wake != UINT64_MAX) {
                     ctx.step_result.wake_millis = next_wake;
+                } else if (ctx.spin_config.spin_yield_requested) {
+                    ctx.step_result.wake_millis = ctx.current_millis;
                 } else {
                     ctx.step_result.wake_millis = ctx.current_millis + 100; // Default: wake in 100ms
                 }

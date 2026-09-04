@@ -1,0 +1,83 @@
+# Final-hop MARGINAL regression repro (v2) for the count==0 cancel-fix.
+#
+# Based on finalhop_swarm3.yaml (bidirectional H_final<->R3, which gave H_final advert_RX at
+# seed 99) BUT with two changes that the earlier A/B lacked:
+#   1. R3->Bob is TRULY marginal at SF7 (-10 dB; SF7 decodes down to ~-7.5 dB SNR, so -3 dB was
+#      actually reliable and hid the regression). -10 dB makes R3's legit count==0 final forward
+#      fail often.
+#   2. H_final->Bob edge ADDED (12 dB, reliable) so H_final's pc==0 rescue relay actually DELIVERS
+#      to Bob when it fires. (finalhop_swarm3 had no such edge, so the rescue could never deliver
+#      and cancelling it was "free" — that is why the earlier A/B missed the regression.)
+#
+# Path discovery: the first FLOOD DM may reach Bob via R3 (-10 dB, marginal) or via H_final's flood
+# rebroadcast (H_final->Bob 12 dB). Either way Bob's PATH+ACK returns via Bob->R3 (reliable), so
+# Alice learns the DIRECT route through R3 (R3 stays the last repeater; H_final is a pure
+# overhearer/rescuer, not on the path).
+#
+# Expected A/B (R3->Bob ~ -10 dB, high PER):
+#   c OFF (a+b): R3 forward fails often -> H_final rescue FIRES (uncancelled) -> delivers via
+#                H_final->Bob. Delivery HIGH; some duplicates when R3 succeeds (dest dedups).
+#   c ON (a+b+c): H_final rescue CANCELLED on R3's overheard count==0 (even when Bob missed it) ->
+#                 does not fire -> DELIVERY LOST on every R3 forward Bob misses.
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+    firmware:
+      max_resend_attempts: 0
+      direct_swarm_fwd: true
+
+nodes:
+  - name: "Alice"
+    location: { lat: 47.6100, lon: -122.4200 }
+    firmware: { type: Companion }
+    keys: { public_key: "0A*" }
+
+  - name: "R1"
+    location: { lat: 47.6100, lon: -122.3800 }
+    firmware: { type: Repeater }
+    keys: { public_key: "01*" }
+
+  - name: "R2"
+    location: { lat: 47.6100, lon: -122.3400 }
+    firmware: { type: Repeater }
+    keys: { public_key: "02*" }
+
+  - name: "R3"
+    location: { lat: 47.6100, lon: -122.3000 }
+    firmware: { type: Repeater }
+    keys: { public_key: "03*" }
+
+  - name: "Bob"
+    location: { lat: 47.6100, lon: -122.2600 }
+    firmware: { type: Companion }
+    keys: { public_key: "0B*" }
+
+  - name: "H_final"
+    location: { lat: 47.6200, lon: -122.3000 }
+    firmware: { type: Repeater }
+    keys: { public_key: "06*" }
+
+edges:
+  # Forward (data) path: R1->R2, R2->R3 RELIABLE; R3->Bob MARGINAL (-10 dB at SF7).
+  - { from: "Alice", to: "R1", mean_snr_db_at20dbm: 15.0, snr_std_dev: 2.0 }
+  - { from: "R1",    to: "R2", mean_snr_db_at20dbm: 15.0, snr_std_dev: 1.0 }
+  - { from: "R2",    to: "R3", mean_snr_db_at20dbm: 15.0, snr_std_dev: 1.0 }
+  - { from: "R3",    to: "Bob", mean_snr_db_at20dbm: -10.0, snr_std_dev: 2.0 }
+  # Return (ACK / path-return) path — RELIABLE.
+  - { from: "R1",  to: "Alice", mean_snr_db_at20dbm: 15.0, snr_std_dev: 2.0 }
+  - { from: "R2",  to: "R1",    mean_snr_db_at20dbm: 15.0, snr_std_dev: 2.0 }
+  - { from: "R3",  to: "R2",    mean_snr_db_at20dbm: 15.0, snr_std_dev: 2.0 }
+  - { from: "Bob", to: "R3",    mean_snr_db_at20dbm: 12.0, snr_std_dev: 2.0 }
+
+  # H_final overhearer/rescuer: bidirectional with R3 (advert + overhear R3's count==0 cancel
+  # trigger), overhears R2's c==1 forward (R2->H_final), and DELIVERS the rescue to Bob.
+  - { from: "R2",      to: "H_final", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "R3",      to: "H_final", mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "H_final", to: "R3",      mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }
+  - { from: "H_final", to: "Bob",     mean_snr_db_at20dbm: 12.0, snr_std_dev: 1.0 }

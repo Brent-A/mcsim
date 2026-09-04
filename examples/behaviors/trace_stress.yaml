@@ -1,0 +1,41 @@
+# TRACE Stress Behavior
+#
+# Alice sends 20 TRACE path packets to Bob across R1→R2→R3.  The 90 s startup
+# gives the mesh time to form before the first TRACE.  The 5 s interval plus
+# 5 s response timeout gives each multi-hop TRACE enough time for up to 3 TX
+# per hop plus the TraceData push at the destination.
+#
+# The path is resolved from node names to public-key prefixes.  flags=0 means
+# 1 byte per hop hash, so the path bytes are the first byte of each hop's
+# public key (R1=0x01, R2=0x02, R3=0x03).  The destination (Bob) is NOT part
+# of the path; he is the node that receives the TRACE after the last listed
+# hop (R3) has forwarded it.
+#
+# Bob must be a Companion so his firmware emits a TraceData push when the
+# TRACE reaches him.  That push is logged by Bob's agent and visible in the
+# simulation trace.
+#
+# Designed for use with trace_retry.yaml (--duration 350s).
+#
+# Retry timing recap (SF7, BW 62.5 kHz, 3 marginal hops):
+#   TX1 airtime:          ~164 ms
+#   Per-hop retry:        up to 3 TX (max_resend_attempts=2)
+#   3-hop forward:        < 2 s even with all retries
+#   5 s interval + 5 s response timeout is ample for any delivery scenario
+
+nodes:
+  - name: "Alice"
+    agent:
+      trace:
+        enabled: true
+        message_count: 20
+        startup_s: 90
+        interval_s: 20
+        response_timeout_s: 15
+        targets:
+          - "R1"
+          - "R2"
+          - "R3"
+        tag: 0x12345678
+        auth: 0xDEADBEEF
+        flags: 0

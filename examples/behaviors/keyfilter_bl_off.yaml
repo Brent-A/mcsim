@@ -1,0 +1,19 @@
+# Blacklist OFF (baseline): identical advert schedule and probes, but GW never
+# blacklists Spam -> every advert must be forwarded to Far across the whole run.
+nodes:
+  - name: "Spam"
+    cli:
+      scheduled:
+        - "@40 advert"
+        - "@60 advert"
+        - "@80 advert"
+        - "@120 advert"
+        - "@140 advert"
+        - "@160 advert"
+        - "@180 advert"
+  - name: "GW"
+    cli:
+      scheduled:
+        - "@85 blacklist"
+        - "@200 clients"
+        - "@205 get flood.suppress"

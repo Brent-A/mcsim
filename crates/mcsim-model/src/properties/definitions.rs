@@ -177,6 +177,71 @@ pub const FIRMWARE_STARTUP_JITTER_S: Property<f64, NodeScope> = Property::new(
 )
 .with_unit("s");
 
+/// Maximum number of firmware-level resend attempts per packet.
+/// Controls how many times the repeater/companion firmware will re-transmit a direct-routed
+/// packet after the initial send (0 = disabled, 1-5, default 2).
+/// Applies to Repeater, Companion, and RoomServer node types.
+pub const FIRMWARE_MAX_RESEND_ATTEMPTS: Property<u8, NodeScope> = Property::new(
+    "firmware/max_resend_attempts",
+    "Maximum firmware-level resend attempts per packet (0=disabled, 1-5, default 2). Applies to all node types",
+    PropertyDefault::Integer(2),
+);
+
+/// Enable neighbour-swarm opportunistic relay of overheard DIRECT packets.
+/// A repeater that overhears a direct packet it is not the addressed next-hop of may
+/// re-transmit it (imitating the successor) so a different node transmits while the
+/// original sender stays in RX. Default on for repeaters. (Replaces sender-side resend.)
+pub const FIRMWARE_DIRECT_SWARM_FWD: Property<bool, NodeScope> = Property::new(
+    "firmware/direct_swarm_fwd",
+    "Enable neighbour-swarm opportunistic relay of overheard DIRECT packets (default: on for repeater)",
+    PropertyDefault::Bool(true),
+);
+
+/// Min R->A (pos1) SNR (dB) for the neighbour-swarm relay gate — R must hear A's forward to cancel
+/// its relay. Overload lever: higher = fewer redundant fires (cancel more reliable). Default 6 dB.
+pub const FIRMWARE_SWARM_RELAY_SNR_A: Property<i8, NodeScope> = Property::new(
+    "firmware/swarm_relay_snr_a",
+    "Min R->A SNR (dB) for the swarm-relay gate (cancel reliability / overload lever). Default 6",
+    PropertyDefault::Integer(6),
+);
+
+/// Min R->B (pos2) SNR (dB) for the neighbour-swarm relay gate — R's relay must reach B. Delivery
+/// lever (N/A if pos2==dest). val_A>val_B = overload-averse, val_A<val_B = delivery-averse. Default 6 dB.
+pub const FIRMWARE_SWARM_RELAY_SNR_B: Property<i8, NodeScope> = Property::new(
+    "firmware/swarm_relay_snr_b",
+    "Min R->B SNR (dB) for the swarm-relay gate (delivery lever). Default 6",
+    PropertyDefault::Integer(6),
+);
+
+/// Redundancy-aware FLOOD suppression master switch (0=off, 1=on). When on, the threshold C is
+/// derived from the neighbour table (adaptive) with a static fallback. Default 1 (zero-admin).
+pub const FIRMWARE_FLOOD_SUPPRESS: Property<u8, NodeScope> = Property::new(
+    "firmware/flood_suppress",
+    "Redundancy-aware flood suppression master switch (0=off, 1=on; adaptive + static fallback). Default 1",
+    PropertyDefault::Integer(1),
+);
+
+/// Overheard forward with SNR >= this (dB) counts double (you are central / redundant). Default 9 dB.
+pub const FIRMWARE_FLOOD_SUPPRESS_SNR_HI: Property<i8, NodeScope> = Property::new(
+    "firmware/flood_suppress_snr_hi",
+    "Flood suppression: overheard forward with SNR>=this counts double (central/redundant). Default 9 dB",
+    PropertyDefault::Integer(9),
+);
+
+/// Overheard forward with SNR < this (dB) counts 0 (you are at the edge, preserve reach). Default 0 dB.
+pub const FIRMWARE_FLOOD_SUPPRESS_SNR_LO: Property<i8, NodeScope> = Property::new(
+    "firmware/flood_suppress_snr_lo",
+    "Flood suppression: overheard forward with SNR<this counts 0 (edge/preserve reach). Default 0 dB",
+    PropertyDefault::Integer(0),
+);
+
+/// Extra TX-delay multiplier for central flood relays (widens the cancel window). Default 3.
+pub const FIRMWARE_FLOOD_SUPPRESS_DELAY_X: Property<u8, NodeScope> = Property::new(
+    "firmware/flood_suppress_delay_x",
+    "Flood suppression: extra TX-delay multiplier for central flood relays. Default 3",
+    PropertyDefault::Integer(3),
+);
+
 // ============================================================================
 // Companion Properties (Node scope)
 // ============================================================================
@@ -273,6 +338,19 @@ pub const CLI_PASSWORD: Property<Option<String>, NodeScope> = Property::new(
 pub const CLI_COMMANDS: Property<Vec<String>, NodeScope> = Property::new(
     "cli/commands",
     "CLI commands to execute at startup. List of raw command strings (e.g., ['set rxdelay 0', 'set name MyNode'])",
+    PropertyDefault::Vec(&[]),
+)
+.with_type(PropertyType::new(PropertyBaseType::String).array());
+
+/// CLI commands to send at scheduled absolute simulation times (runtime probing).
+///
+/// Unlike `cli/commands` (which fire once at startup, before the network has populated),
+/// each entry here fires at a chosen sim time so runtime-populated state can be queried —
+/// e.g. `clients`, `reach <hash>`, `get flood.suppress`, `neighbors`. Each entry is a string
+/// of the form `"@<seconds> <command>"`, e.g. `"@250 clients"` or `"@120 reach 01020304"`.
+pub const CLI_SCHEDULED: Property<Vec<String>, NodeScope> = Property::new(
+    "cli/scheduled",
+    "CLI commands to send at scheduled absolute sim times, for probing runtime state after the network has populated. Each entry: '@<seconds> <command>' (e.g. ['@120 neighbors', '@250 reach 01020304']).",
     PropertyDefault::Vec(&[]),
 )
 .with_type(PropertyType::new(PropertyBaseType::String).array());
@@ -378,6 +456,223 @@ pub const AGENT_DIRECT_SHUTDOWN_S: Property<Option<f64>, NodeScope> = Property::
 .with_type(PropertyType::new(PropertyBaseType::Float).nullable())
 .with_unit("s");
 
+/// Number of uncounted path-warmup DMs to send before the main counted session.
+/// Each warmup DM triggers path discovery (FLOOD → PATH+ACK from Bob → Alice learns
+/// DIRECT route) but is not counted in delivery metrics.
+/// 0 = disabled (default). Warmup DMs use the same ack_timeout_s and
+/// session_interval_s timing as regular messages.
+pub const AGENT_DIRECT_PATH_WARMUP_COUNT: Property<u32, NodeScope> = Property::new(
+    "agent/direct/path_warmup_count",
+    "Number of uncounted warmup DMs to send before the counted session (0 = disabled)",
+    PropertyDefault::Integer(0),
+);
+
+/// Number of retries of an unacknowledged DM: on ack timeout the same message is
+/// resent with attempt+1 (mirroring the companion app's retry behaviour, which the
+/// firmware's corridor-flood latch keys on — first attempt corridor-scoped, retries
+/// plain flood). 0 = never retry (previous behaviour).
+pub const AGENT_DIRECT_RETRIES: Property<u32, NodeScope> = Property::new(
+    "agent/direct/retries",
+    "Number of retries of an unacknowledged DM, resent with attempt+1 (0 = no retry)",
+    PropertyDefault::Integer(0),
+);
+
+// ============================================================================
+// Agent Login Properties (Node scope)
+// ============================================================================
+
+/// Enable logging in to repeater / room-server nodes.
+pub const AGENT_LOGIN_ENABLED: Property<bool, NodeScope> = Property::new(
+    "agent/login/enabled",
+    "Enable logging in to repeater / room-server nodes",
+    PropertyDefault::Bool(false),
+);
+
+/// Wait time before starting logins.
+pub const AGENT_LOGIN_STARTUP_S: Property<f64, NodeScope> = Property::new(
+    "agent/login/startup_s",
+    "Wait time before starting logins",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+/// Standard deviation in the randomness of the login startup interval.
+pub const AGENT_LOGIN_STARTUP_JITTER_S: Property<f64, NodeScope> = Property::new(
+    "agent/login/startup_jitter_s",
+    "Standard deviation in the randomness of the login startup interval",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+/// Names of server nodes (repeater / room-server) to log in to. If null, all repeater/room-server nodes are targeted.
+pub const AGENT_LOGIN_TARGETS: Property<Option<Vec<String>>, NodeScope> = Property::new(
+    "agent/login/targets",
+    "Names of server nodes (repeater / room-server) to log in to. If null, all repeater/room-server nodes are targeted",
+    PropertyDefault::Null,
+)
+.with_type(PropertyType::new(PropertyBaseType::String).array().nullable())
+.with_unit("node_name");
+
+/// Password sent with the login (empty string = no password).
+pub const AGENT_LOGIN_PASSWORD: Property<String, NodeScope> = Property::new(
+    "agent/login/password",
+    "Password sent with the login (empty string = no password)",
+    PropertyDefault::String(""),
+);
+
+/// Timeout waiting for a LoginSuccess/LoginFail push before treating the login as failed.
+pub const AGENT_LOGIN_RESPONSE_TIMEOUT_S: Property<f64, NodeScope> = Property::new(
+    "agent/login/response_timeout_s",
+    "Timeout waiting for a LoginSuccess/LoginFail push before treating the login as failed",
+    PropertyDefault::Float(10.0),
+)
+.with_unit("s");
+
+/// Interval between finishing one target and starting the next (and before a retry).
+pub const AGENT_LOGIN_INTERVAL_S: Property<f64, NodeScope> = Property::new(
+    "agent/login/interval_s",
+    "Interval between finishing one target and starting the next (and before a retry)",
+    PropertyDefault::Float(5.0),
+)
+.with_unit("s");
+
+/// Standard deviation of the randomness in the login interval timer.
+pub const AGENT_LOGIN_INTERVAL_JITTER_S: Property<f64, NodeScope> = Property::new(
+    "agent/login/interval_jitter_s",
+    "Standard deviation of the randomness in the login interval timer",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+/// Max login attempts per target before giving up (1 = no retry).
+pub const AGENT_LOGIN_MAX_ATTEMPTS: Property<u32, NodeScope> = Property::new(
+    "agent/login/max_attempts",
+    "Max login attempts per target before giving up (1 = no retry)",
+    PropertyDefault::Integer(1),
+);
+
+/// If set, repeat the whole login cycle after this many seconds (reconnect simulation).
+pub const AGENT_LOGIN_REPEAT_LOGIN_S: Property<Option<f64>, NodeScope> = Property::new(
+    "agent/login/repeat_login_s",
+    "If set, repeat the whole login cycle after this many seconds (reconnect simulation)",
+    PropertyDefault::Null,
+)
+.with_type(PropertyType::new(PropertyBaseType::Float).nullable())
+.with_unit("s");
+
+// ============================================================================
+// Agent Clock-Divergence Properties (Node scope)
+// ============================================================================
+
+/// Seconds added to the app-clock (message) timestamp on outgoing plain/channel packets,
+/// modelling a Companion whose app clock diverges from its node RTC. Login/CLI timestamps
+/// stay on the RTC and are unaffected. Positive = app clock ahead.
+pub const AGENT_APP_CLOCK_OFFSET_S: Property<f64, NodeScope> = Property::new(
+    "agent/app_clock_offset_secs",
+    "Seconds added to the app-clock (message) timestamp on outgoing plain/channel packets, modelling a Companion whose app clock diverges from its node RTC. Login/CLI timestamps stay on the RTC. Positive = app clock ahead",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+// ============================================================================
+// Agent TRACE Properties (Node scope)
+// ============================================================================
+
+/// Enable sending TRACE path packets.
+pub const AGENT_TRACE_ENABLED: Property<bool, NodeScope> = Property::new(
+    "agent/trace/enabled",
+    "Enable sending TRACE path packets",
+    PropertyDefault::Bool(false),
+);
+
+/// Wait time before starting TRACE sends.
+pub const AGENT_TRACE_STARTUP_S: Property<f64, NodeScope> = Property::new(
+    "agent/trace/startup_s",
+    "Wait time before starting TRACE sends",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+/// Standard deviation in the randomness of the TRACE startup interval.
+pub const AGENT_TRACE_STARTUP_JITTER_S: Property<f64, NodeScope> = Property::new(
+    "agent/trace/startup_jitter_s",
+    "Standard deviation in the randomness of the TRACE startup interval",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+/// Names of nodes forming the TRACE path. The destination is the last node in the list.
+/// Each hop is resolved to a public-key prefix based on flags.
+pub const AGENT_TRACE_TARGETS: Property<Vec<String>, NodeScope> = Property::new(
+    "agent/trace/targets",
+    "Names of nodes forming the TRACE path. Destination is the last node. Each hop is resolved to a public-key prefix",
+    PropertyDefault::Vec(&[]),
+)
+.with_type(PropertyType::new(PropertyBaseType::String).array());
+
+/// Interval after receiving a TraceData push (or timeout) before sending the next TRACE.
+pub const AGENT_TRACE_INTERVAL_S: Property<f64, NodeScope> = Property::new(
+    "agent/trace/interval_s",
+    "Interval after receiving a TraceData push (or timeout) before sending the next TRACE",
+    PropertyDefault::Float(5.0),
+)
+.with_unit("s");
+
+/// Standard deviation of the randomness in the TRACE interval timer.
+pub const AGENT_TRACE_INTERVAL_JITTER_S: Property<f64, NodeScope> = Property::new(
+    "agent/trace/interval_jitter_s",
+    "Standard deviation of the randomness in the TRACE interval timer",
+    PropertyDefault::Float(0.0),
+)
+.with_unit("s");
+
+/// Timeout waiting for a TraceData push before proceeding.
+pub const AGENT_TRACE_RESPONSE_TIMEOUT_S: Property<f64, NodeScope> = Property::new(
+    "agent/trace/response_timeout_s",
+    "Timeout waiting for a TraceData push before proceeding",
+    PropertyDefault::Float(10.0),
+)
+.with_unit("s");
+
+/// Total count of TRACE packets before the agent stops sending.
+pub const AGENT_TRACE_MESSAGE_COUNT: Property<Option<u32>, NodeScope> = Property::new(
+    "agent/trace/message_count",
+    "Total count of TRACE packets before the agent stops sending. If null, sends indefinitely",
+    PropertyDefault::Null,
+)
+.with_type(PropertyType::new(PropertyBaseType::Integer).nullable());
+
+/// Time before the agent stops sending TRACE packets.
+pub const AGENT_TRACE_SHUTDOWN_S: Property<Option<f64>, NodeScope> = Property::new(
+    "agent/trace/shutdown_s",
+    "Time before the agent stops sending TRACE packets. If null, sends indefinitely",
+    PropertyDefault::Null,
+)
+.with_type(PropertyType::new(PropertyBaseType::Float).nullable())
+.with_unit("s");
+
+/// TRACE tag base value (echoed in TraceData).
+pub const AGENT_TRACE_TAG: Property<u32, NodeScope> = Property::new(
+    "agent/trace/tag",
+    "TRACE tag base value. The actual tag sent is tag + trace_index",
+    PropertyDefault::Integer(0),
+);
+
+/// TRACE auth code base value (echoed in TraceData).
+pub const AGENT_TRACE_AUTH: Property<u32, NodeScope> = Property::new(
+    "agent/trace/auth",
+    "TRACE auth code base value. The actual auth sent is auth + trace_index",
+    PropertyDefault::Integer(0),
+);
+
+/// TRACE flags. Lower 2 bits select path hash size:
+///   0 = 1 byte/hash (default), 1 = 2 bytes/hash, 2 = 4 bytes/hash, 3 = 8 bytes/hash.
+pub const AGENT_TRACE_FLAGS: Property<u8, NodeScope> = Property::new(
+    "agent/trace/flags",
+    "TRACE flags. Lower 2 bits select path hash size: 0=1B/hash, 1=2B/hash, 2=4B/hash, 3=8B/hash",
+    PropertyDefault::Integer(0),
+);
+
 // ============================================================================
 // Agent Channel Message Properties (Node scope)
 // ============================================================================
@@ -469,6 +764,16 @@ pub const AGENT_CHANNEL_SHUTDOWN_S: Property<Option<f64>, NodeScope> = Property:
 )
 .with_type(PropertyType::new(PropertyBaseType::Float).nullable())
 .with_unit("s");
+
+/// Geo-corridor waypoints for scoped channel flood delivery.
+/// Each entry is a string formatted as "lat,lon,radius_km" (e.g. "47.6,-122.3,50.0").
+/// When non-empty the agent uses CMD_SEND_CHANNEL_TXT_MSG_CORRIDOR.
+pub const AGENT_CHANNEL_CORRIDOR: Property<Vec<String>, NodeScope> = Property::new(
+    "agent/channel/corridor",
+    "Geo-corridor waypoints for scoped flood delivery (lat,lon,radius_km per entry)",
+    PropertyDefault::Vec(&[]),
+)
+.with_type(PropertyType::new(PropertyBaseType::String).array());
 
 // ============================================================================
 // Metrics Properties (Node scope)

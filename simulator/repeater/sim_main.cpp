@@ -38,36 +38,41 @@ thread_local EnvironmentSensorManager _sim_sensors_instance;
 // Repeater-specific SimNode implementation
 // ============================================================================
 
-struct RepeaterSimNode : public SimNodeImpl {
+struct RepeaterSimNode : public SimNodeImpl
+{
     // Firmware objects
     SimRNG fast_rng;
     SimpleMeshTables tables;
     std::unique_ptr<MyMesh> mesh;
-    
+
     // CLI command buffer (matches firmware's main.cpp)
     char command[160];
-    
-    RepeaterSimNode() : mesh(nullptr) {
+
+    RepeaterSimNode() : mesh(nullptr)
+    {
         command[0] = 0;
     }
-    
-    ~RepeaterSimNode() override {
+
+    ~RepeaterSimNode() override
+    {
         // Shutdown the thread
         {
             std::lock_guard<std::mutex> lock(ctx.step_mutex);
             ctx.state.store(SimContext::State::SHUTDOWN);
         }
         ctx.step_cv.notify_all();
-        
-        if (node_thread.joinable()) {
+
+        if (node_thread.joinable())
+        {
             node_thread.join();
         }
     }
-    
-    void setup() override {
+
+    void setup() override
+    {
         // Initialize the RNG with the configured seed
         fast_rng.seed(config.rng_seed);
-        
+
         // Create the mesh instance using the global board/radio references
         // (which are redirected via macros to _sim_board_instance etc.)
         mesh = std::make_unique<MyMesh>(
@@ -76,71 +81,145 @@ struct RepeaterSimNode : public SimNodeImpl {
             ctx.millis_clock,
             fast_rng,
             _sim_rtc_instance,
-            tables
-        );
-        
+            tables);
+
         // Set the identity from config (both private and public keys)
         // readFrom expects: prv_key (64 bytes) followed by pub_key (32 bytes)
         uint8_t identity_data[PRV_KEY_SIZE + PUB_KEY_SIZE];
         memcpy(identity_data, config.private_key, PRV_KEY_SIZE);
         memcpy(identity_data + PRV_KEY_SIZE, config.public_key, PUB_KEY_SIZE);
         mesh->self_id.readFrom(identity_data, sizeof(identity_data));
-        
+
         // Initialize the mesh using the SPIFFS global filesystem
         mesh->begin(&SPIFFS);
-        
+
         // Set the node name from config (used for advertisements)
-        if (config.node_name[0] != '\0') {
-            NodePrefs* prefs = mesh->getNodePrefs();
+        if (config.node_name[0] != '\0')
+        {
+            NodePrefs *prefs = mesh->getNodePrefs();
             strncpy(prefs->node_name, config.node_name, sizeof(prefs->node_name) - 1);
             prefs->node_name[sizeof(prefs->node_name) - 1] = '\0';
+
+            // Propagate geographic position so that corridor checks work correctly.
+            // The firmware guards on (0,0) → fail-open, so zero means "position unknown".
+            prefs->node_lat = config.node_lat;
+            prefs->node_lon = config.node_lon;
+
+            // Override firmware-level resend attempts from simulation config.
+            // Only when the firmware actually exposes this field (feature-detected
+            // by build.rs → SIM_FW_HAS_MAX_RESEND_ATTEMPTS), so mcsim builds against
+            // firmware branches that lack it.
+#ifdef SIM_FW_HAS_MAX_RESEND_ATTEMPTS
+            prefs->max_resend_attempts = config.max_resend_attempts < 6 ? config.max_resend_attempts : 2;
+#endif
+
+            // Override neighbour-swarm relay from simulation config (feature-detected by
+            // build.rs → SIM_FW_HAS_DIRECT_SWARM_FWD).
+#ifdef SIM_FW_HAS_DIRECT_SWARM_FWD
+            prefs->direct_swarm_fwd = config.direct_swarm_fwd ? 1 : 0;
+            // SNR thresholds (dB in config -> x4 for the firmware's int8 store). Clamp to a sane range.
+            int8_t snr_a = config.swarm_relay_snr_a;
+            if (snr_a > 30)
+                snr_a = 30;
+            if (snr_a < -30)
+                snr_a = -30;
+            int8_t snr_b = config.swarm_relay_snr_b;
+            if (snr_b > 30)
+                snr_b = 30;
+            if (snr_b < -30)
+                snr_b = -30;
+            prefs->swarm_relay_snr_a = snr_a * 4;
+            prefs->swarm_relay_snr_b = snr_b * 4;
+            // NOTE: boot sendNodeDiscoverReq is intentionally NOT called here (unlike HW main.cpp) —
+            // in the sim all repeaters boot together, so simultaneous discover-REQs collide and
+            // disrupt the passive advert-based neighbour discovery that the swarm relay relies on.
+            // Neighbour tables populate passively from zero-hop repeater adverts instead.
+#endif
+
+            // Override redundancy-aware FLOOD suppression from simulation config
+            // (feature-detected by build.rs → SIM_FW_HAS_FLOOD_SUPPRESS).
+#ifdef SIM_FW_HAS_FLOOD_SUPPRESS
+            prefs->flood_suppress = config.flood_suppress ? 1 : 0;
+            // SNR thresholds are in dB in the config; the firmware scales to x4 at
+            // compare time, so store them as plain dB here (unlike swarm_relay_snr).
+            int8_t fsnr_hi = config.flood_suppress_snr_hi;
+            if (fsnr_hi > 30)
+                fsnr_hi = 30;
+            if (fsnr_hi < -30)
+                fsnr_hi = -30;
+            int8_t fsnr_lo = config.flood_suppress_snr_lo;
+            if (fsnr_lo > 30)
+                fsnr_lo = 30;
+            if (fsnr_lo < -30)
+                fsnr_lo = -30;
+            prefs->flood_suppress_snr_hi = fsnr_hi;
+            prefs->flood_suppress_snr_lo = fsnr_lo;
+            prefs->flood_suppress_delay_x = config.flood_suppress_delay_x;
+#endif
         }
-        
+
         // Reset command buffer
         command[0] = 0;
     }
-    
-    void loop() override {
+
+    void loop() override
+    {
         // Process serial CLI commands (matches firmware's main.cpp loop)
         int len = strlen(command);
-        while (Serial.available() && len < (int)sizeof(command) - 1) {
+        while (Serial.available() && len < (int)sizeof(command) - 1)
+        {
             char c = Serial.read();
-            if (c != '\n') {
+            if (c != '\n')
+            {
                 command[len++] = c;
                 command[len] = 0;
                 Serial.print(c);
             }
-            if (c == '\r') break;
+            if (c == '\r')
+                break;
         }
-        if (len == (int)sizeof(command) - 1) {  // command buffer full
+        if (len == (int)sizeof(command) - 1)
+        { // command buffer full
             command[sizeof(command) - 1] = '\r';
         }
-        
-        if (len > 0 && command[len - 1] == '\r') {  // received complete line
+
+        if (len > 0 && command[len - 1] == '\r')
+        { // received complete line
             Serial.print('\n');
-            command[len - 1] = 0;  // replace newline with C string null terminator
+            command[len - 1] = 0; // replace newline with C string null terminator
             char reply[160];
-            mesh->handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
-            if (reply[0]) {
+            mesh->handleCommand(0, command, reply); // NOTE: there is no sender_timestamp via serial!
+            if (reply[0])
+            {
                 Serial.print("  -> ");
                 Serial.println(reply);
             }
-            
-            command[0] = 0;  // reset command buffer
+
+            command[0] = 0; // reset command buffer
         }
-        
+
         // Run mesh loop
-        if (mesh) {
+        if (mesh)
+        {
             mesh->loop();
         }
-        
+
         // Run sensors loop
         _sim_sensors_instance.loop();
-        
+
         ctx.rtc_clock.tick();
+        // The firmware reads the SimRTCClock it was constructed with (the thread_local
+        // _sim_rtc_instance), while sim_step_begin() advances ctx.rtc_clock and
+        // ctx.current_rtc_secs -- different objects, so the firmware's RTC stayed frozen
+        // at initial_rtc. A frozen RTC makes every advert byte-identical (same emitted
+        // timestamp, deterministic signature), so the dedup table eats later copies and
+        // FLOOD adverts can never propagate in the sim. Sync the clock the firmware
+        // actually reads from the coordinator-provided seconds on every step.
+        _sim_rtc_instance.setCurrentTime(ctx.current_rtc_secs);
     }
-    
-    const char* getNodeType() const override {
+
+    const char *getNodeType() const override
+    {
         return "repeater";
     }
 };
@@ -149,82 +228,97 @@ struct RepeaterSimNode : public SimNodeImpl {
 // C API Implementation
 // ============================================================================
 
-extern "C" {
+extern "C"
+{
 
-SIM_API SimNodeHandle sim_create(const SimNodeConfig* config) {
-    if (!config) return nullptr;
-    
-    auto* node = new RepeaterSimNode();
-    node->config = *config;
-    
-    // Apply spin detection config from SimNodeConfig
-    node->ctx.spin_config.threshold = config->spin_detection_threshold;
-    node->ctx.spin_config.log_spin_detection = config->log_spin_detection != 0;
-    node->ctx.spin_config.log_loop_iterations = config->log_loop_iterations != 0;
-    // Note: idle_loops_before_yield is used in sim_node_base.cpp for yield logic
-    
-    // Start the node thread
-    node->node_thread = std::thread(&RepeaterSimNode::threadMain, node);
-    
-    return node;
-}
-
-SIM_API void sim_destroy(SimNodeHandle node) {
-    if (!node) return;
-    
-    auto* repeater = static_cast<RepeaterSimNode*>(node);
-    delete repeater;
-}
-
-SIM_API void sim_reboot(SimNodeHandle node, const SimNodeConfig* config) {
-    if (!node || !config) return;
-    
-    auto* repeater = static_cast<RepeaterSimNode*>(node);
-    
-    // Wait for node to be idle
+    SIM_API SimNodeHandle sim_create(const SimNodeConfig *config)
     {
-        std::unique_lock<std::mutex> lock(repeater->ctx.step_mutex);
-        repeater->ctx.step_cv.wait(lock, [repeater] {
-            return repeater->ctx.state.load() == SimContext::State::IDLE ||
-                   repeater->ctx.state.load() == SimContext::State::YIELDED;
-        });
-    }
-    
-    // Reset subsystems (but preserve filesystem)
-    // Use the pointers to the firmware thread's instances
-    repeater->config = *config;
-    if (repeater->radio_ptr) {
-        repeater->radio_ptr->configure(config->lora_freq, config->lora_bw,
-                                       config->lora_sf, config->lora_cr, config->lora_tx_power);
-        repeater->radio_ptr->begin();
-    }
-    if (repeater->board_ptr) {
-        repeater->board_ptr->init();
-    }
-    repeater->ctx.rng.seed(config->rng_seed);
-    repeater->ctx.millis_clock.setMillis(config->initial_millis);
-    repeater->ctx.rtc_clock.setCurrentTime(config->initial_rtc);
-    
-    // Re-run setup
-    repeater->setup();
-}
+        if (!config)
+            return nullptr;
 
-SIM_API const char* sim_get_node_type(void) {
-    return "repeater";
-}
+        auto *node = new RepeaterSimNode();
+        node->config = *config;
 
-// Repeater doesn't use frame-based serial interface, provide stubs
-SIM_API void sim_inject_serial_frame(SimNodeHandle node,
-                                      const uint8_t* data, size_t len) {
-    (void)node; (void)data; (void)len;
-    // Repeater uses byte-based Serial, not frame-based interface
-}
+        // Apply spin detection config from SimNodeConfig
+        node->ctx.spin_config.threshold = config->spin_detection_threshold;
+        node->ctx.spin_config.log_spin_detection = config->log_spin_detection != 0;
+        node->ctx.spin_config.log_loop_iterations = config->log_loop_iterations != 0;
+        // Note: idle_loops_before_yield is used in sim_node_base.cpp for yield logic
 
-SIM_API size_t sim_collect_serial_frame(SimNodeHandle node,
-                                         uint8_t* buffer, size_t max_len) {
-    (void)node; (void)buffer; (void)max_len;
-    // Repeater uses byte-based Serial, not frame-based interface
-    return 0;
-}
+        // Start the node thread
+        node->node_thread = std::thread(&RepeaterSimNode::threadMain, node);
+
+        return node;
+    }
+
+    SIM_API void sim_destroy(SimNodeHandle node)
+    {
+        if (!node)
+            return;
+
+        auto *repeater = static_cast<RepeaterSimNode *>(node);
+        delete repeater;
+    }
+
+    SIM_API void sim_reboot(SimNodeHandle node, const SimNodeConfig *config)
+    {
+        if (!node || !config)
+            return;
+
+        auto *repeater = static_cast<RepeaterSimNode *>(node);
+
+        // Wait for node to be idle
+        {
+            std::unique_lock<std::mutex> lock(repeater->ctx.step_mutex);
+            repeater->ctx.step_cv.wait(lock, [repeater]
+                                       { return repeater->ctx.state.load() == SimContext::State::IDLE ||
+                                                repeater->ctx.state.load() == SimContext::State::YIELDED; });
+        }
+
+        // Reset subsystems (but preserve filesystem)
+        // Use the pointers to the firmware thread's instances
+        repeater->config = *config;
+        if (repeater->radio_ptr)
+        {
+            repeater->radio_ptr->configure(config->lora_freq, config->lora_bw,
+                                           config->lora_sf, config->lora_cr, config->lora_tx_power);
+            repeater->radio_ptr->begin();
+        }
+        if (repeater->board_ptr)
+        {
+            repeater->board_ptr->init();
+        }
+        repeater->ctx.rng.seed(config->rng_seed);
+        repeater->ctx.millis_clock.setMillis(config->initial_millis);
+        repeater->ctx.rtc_clock.setCurrentTime(config->initial_rtc);
+
+        // Re-run setup
+        repeater->setup();
+    }
+
+    SIM_API const char *sim_get_node_type(void)
+    {
+        return "repeater";
+    }
+
+    // Repeater doesn't use frame-based serial interface, provide stubs
+    SIM_API void sim_inject_serial_frame(SimNodeHandle node,
+                                         const uint8_t *data, size_t len)
+    {
+        (void)node;
+        (void)data;
+        (void)len;
+        // Repeater uses byte-based Serial, not frame-based interface
+    }
+
+    SIM_API size_t sim_collect_serial_frame(SimNodeHandle node,
+                                            uint8_t *buffer, size_t max_len)
+    {
+        (void)node;
+        (void)buffer;
+        (void)max_len;
+        // Repeater uses byte-based Serial, not frame-based interface
+        return 0;
+    }
 
 } // extern "C"

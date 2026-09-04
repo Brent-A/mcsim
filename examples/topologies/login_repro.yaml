@@ -1,0 +1,69 @@
+# Login Reproduction Topology
+#
+# A Companion (app-driven) logs into a Repeater and a Room-Server. All three nodes
+# are in direct radio range with strong, symmetric links — mirroring the hardware
+# test bed where radio is NOT the variable; only the firmware is
+# (pr-2670 vs bugfix/login-msg-timer).
+#
+#   [Companion] <----> [Repeater] <----> [RoomServer]
+#        \_______________________________/
+#
+# Toggle repeated-sending via defaults.node.firmware.max_resend_attempts:
+#   0 = repeated-sending OFF (bugfix/login-msg-timer behaviour)
+#   2 = pr-2670 default
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 868100000      # EU 868.1 MHz
+      bandwidth_hz: 62500
+      spreading_factor: 9
+      coding_rate: 5
+      tx_power_dbm: 20
+    firmware:
+      max_resend_attempts: 2       # 0 disables repeated-sending; 2 = pr-2670 default
+
+nodes:
+  - name: "Companion"
+    location:
+      lat: 51.22770
+      lon: 6.77350
+    firmware:
+      type: Companion
+
+  - name: "Repeater"
+    location:
+      lat: 51.22780
+      lon: 6.77360
+    firmware:
+      type: Repeater
+
+  - name: "RoomServer"
+    location:
+      lat: 51.22790
+      lon: 6.77370
+    firmware:
+      type: RoomServer
+
+edges:
+  # All pairs in range, strong symmetric links (no radio issues).
+  - from: "Companion"
+    to: "Repeater"
+    mean_snr_db_at20dbm: 18.0
+  - from: "Repeater"
+    to: "Companion"
+    mean_snr_db_at20dbm: 18.0
+
+  - from: "Companion"
+    to: "RoomServer"
+    mean_snr_db_at20dbm: 18.0
+  - from: "RoomServer"
+    to: "Companion"
+    mean_snr_db_at20dbm: 18.0
+
+  - from: "Repeater"
+    to: "RoomServer"
+    mean_snr_db_at20dbm: 18.0
+  - from: "RoomServer"
+    to: "Repeater"
+    mean_snr_db_at20dbm: 18.0

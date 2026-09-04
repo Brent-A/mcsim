@@ -1,0 +1,27 @@
+# Corridor Broadcast Behavior
+#
+# Alice sends exactly ONE corridor-scoped channel message.
+# The corridor defines an L-shape over Seattle:
+#
+#   WP1 (47.6100, -122.4000) — west end  (3 km radius)
+#   WP2 (47.6100, -122.3500) — corner    (3 km radius)
+#   WP3 (47.6600, -122.3500) — north end (3 km radius)
+#
+# Repeaters physically inside this corridor will forward the packet;
+# repeaters outside will drop it (corridor check in allowPacketForward).
+#
+# Use with examples/topologies/corridor_l_shape.yaml:
+#   cargo run -- run examples/topologies/corridor_l_shape.yaml \
+#                    examples/behaviors/corridor_broadcast.yaml \
+#                    --duration 30s
+
+nodes:
+  - name: "Alice"
+    agent:
+      channel:
+        enabled: true
+        message_count: 1
+        corridor:
+          - "47.6100,-122.4000,3"    # WP1 — west end
+          - "47.6100,-122.3500,3"    # WP2 — 90° corner
+          - "47.6600,-122.3500,3"    # WP3 — north end

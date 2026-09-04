@@ -118,29 +118,84 @@ impl Default for ChannelMessageConfig {
 }
 
 // ============================================================================
+// TRACE Configuration
+// ============================================================================
+
+/// Configuration for TRACE path sending behavior extracted from properties.
+#[derive(Debug, Clone)]
+pub struct TraceMessageConfig {
+    /// Whether TRACE sending is enabled.
+    pub enabled: bool,
+    /// Wait time before starting TRACE sends.
+    pub startup_s: f64,
+    /// Standard deviation in the randomness of the startup interval.
+    pub startup_jitter_s: f64,
+    /// Names of nodes forming the TRACE path.
+    pub targets: Vec<String>,
+    /// Interval after receiving a TraceData push (or timeout) before sending the next trace.
+    pub interval_s: f64,
+    /// Standard deviation of the randomness in the interval timer.
+    pub interval_jitter_s: f64,
+    /// Timeout waiting for a TraceData push before proceeding.
+    pub response_timeout_s: f64,
+    /// Count of traces before the agent stops sending.
+    pub message_count: Option<u32>,
+    /// Time before the agent stops sending.
+    pub shutdown_s: Option<f64>,
+    /// TRACE tag base value.
+    pub tag: u32,
+    /// TRACE auth code base value.
+    pub auth: u32,
+    /// TRACE flags.
+    pub flags: u8,
+}
+
+impl Default for TraceMessageConfig {
+    fn default() -> Self {
+        TraceMessageConfig {
+            enabled: false,
+            startup_s: 0.0,
+            startup_jitter_s: 0.0,
+            targets: Vec::new(),
+            interval_s: 5.0,
+            interval_jitter_s: 0.0,
+            response_timeout_s: 10.0,
+            message_count: None,
+            shutdown_s: None,
+            tag: 0,
+            auth: 0,
+            flags: 0,
+        }
+    }
+}
+
+// ============================================================================
 // Unified Agent Configuration
 // ============================================================================
 
 /// Unified agent configuration extracted from resolved properties.
-/// An agent is enabled if either direct or channel messaging is enabled.
+/// An agent is enabled if direct, channel, or TRACE messaging is enabled.
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
     /// Direct message configuration.
     pub direct: DirectMessageConfig,
     /// Channel message configuration.
     pub channel: ChannelMessageConfig,
+    /// TRACE path configuration.
+    pub trace: TraceMessageConfig,
 }
 
 impl AgentConfig {
     /// Create an AgentConfig from resolved properties.
     ///
-    /// Returns `None` if neither direct nor channel messaging is enabled.
+    /// Returns `None` if neither direct, channel, nor TRACE messaging is enabled.
     pub fn create(props: &ResolvedProperties<NodeScope>) -> Option<Self> {
         let direct_enabled: bool = props.get(&AGENT_DIRECT_ENABLED);
         let channel_enabled: bool = props.get(&AGENT_CHANNEL_ENABLED);
+        let trace_enabled: bool = props.get(&AGENT_TRACE_ENABLED);
 
-        // No agent if neither is enabled
-        if !direct_enabled && !channel_enabled {
+        // No agent if none is enabled
+        if !direct_enabled && !channel_enabled && !trace_enabled {
             return None;
         }
 
@@ -173,12 +228,27 @@ impl AgentConfig {
             shutdown_s: props.get(&AGENT_CHANNEL_SHUTDOWN_S),
         };
 
-        Some(AgentConfig { direct, channel })
+        let trace = TraceMessageConfig {
+            enabled: trace_enabled,
+            startup_s: props.get(&AGENT_TRACE_STARTUP_S),
+            startup_jitter_s: props.get(&AGENT_TRACE_STARTUP_JITTER_S),
+            targets: props.get(&AGENT_TRACE_TARGETS),
+            interval_s: props.get(&AGENT_TRACE_INTERVAL_S),
+            interval_jitter_s: props.get(&AGENT_TRACE_INTERVAL_JITTER_S),
+            response_timeout_s: props.get(&AGENT_TRACE_RESPONSE_TIMEOUT_S),
+            message_count: props.get(&AGENT_TRACE_MESSAGE_COUNT),
+            shutdown_s: props.get(&AGENT_TRACE_SHUTDOWN_S),
+            tag: props.get(&AGENT_TRACE_TAG),
+            auth: props.get(&AGENT_TRACE_AUTH),
+            flags: props.get(&AGENT_TRACE_FLAGS),
+        };
+
+        Some(AgentConfig { direct, channel, trace })
     }
 
     /// Check if this agent has any messaging behavior enabled.
     pub fn is_enabled(&self) -> bool {
-        self.direct.enabled || self.channel.enabled
+        self.direct.enabled || self.channel.enabled || self.trace.enabled
     }
 
     /// Check if direct messaging is enabled.

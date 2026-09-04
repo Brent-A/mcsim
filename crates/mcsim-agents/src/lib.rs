@@ -25,6 +25,7 @@ use mcsim_companion_protocol::{
     PublicKeyPrefix, ReceivedChannelMessage, ReceivedContactMessage, Response, TextType,
     ADV_TYPE_CHAT, ADV_TYPE_REPEATER, ADV_TYPE_ROOM_SERVER, MAX_PATH_SIZE,
 };
+use meshcore_packet::CorridorTriple;
 use mcsim_metrics::{metric_defs, MetricLabels};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
@@ -67,6 +68,15 @@ pub struct DirectMessageConfig {
     /// Time before the agent stops sending.
     /// If None, the agent sends indefinitely.
     pub shutdown_s: Option<f64>,
+    /// Number of uncounted path-warmup DMs to send before the main counted session.
+    /// Each warmup DM triggers path discovery (FLOOD → PATH+ACK → Alice learns DIRECT
+    /// route) but is not counted in delivery metrics. 0 = disabled.
+    pub path_warmup_count: u32,
+    /// Number of retries of an unacknowledged DM: on ack timeout the same message is
+    /// resent with attempt+1 (mirroring the companion app's retry behaviour — the
+    /// firmware's corridor auto-scoping keys on it: first attempt corridor-scoped,
+    /// retries plain flood). 0 = never retry.
+    pub retries: u32,
 }
 
 impl Default for DirectMessageConfig {
@@ -84,6 +94,8 @@ impl Default for DirectMessageConfig {
             session_interval_jitter_s: 0.0,
             message_count: None,
             shutdown_s: None,
+            path_warmup_count: 0,
+            retries: 0,
         }
     }
 }
@@ -152,27 +164,42 @@ pub struct ContactTarget {
     pub public_key: NodeId,
     /// Contact type (ADV_TYPE_CHAT, ADV_TYPE_REPEATER, ADV_TYPE_ROOM_SERVER).
     pub contact_type: u8,
+    /// Contact latitude in microdegrees (0 = unknown). Pre-seeded from the
+    /// node's location so firmware features that read contact positions
+    /// (e.g. flood corridor proposals) work before an advert arrives.
+    #[serde(default)]
+    pub gps_lat: i32,
+    /// Contact longitude in microdegrees (0 = unknown).
+    #[serde(default)]
+    pub gps_lon: i32,
 }
 
 impl ContactTarget {
     /// Create a new contact target with a specified type.
     pub fn new(name: String, public_key: NodeId, contact_type: u8) -> Self {
-        ContactTarget { name, public_key, contact_type }
+        ContactTarget { name, public_key, contact_type, gps_lat: 0, gps_lon: 0 }
     }
-    
+
     /// Create a new chat contact target.
     pub fn chat(name: String, public_key: NodeId) -> Self {
-        ContactTarget { name, public_key, contact_type: ADV_TYPE_CHAT }
+        ContactTarget { name, public_key, contact_type: ADV_TYPE_CHAT, gps_lat: 0, gps_lon: 0 }
     }
-    
+
     /// Create a new repeater contact target.
     pub fn repeater(name: String, public_key: NodeId) -> Self {
-        ContactTarget { name, public_key, contact_type: ADV_TYPE_REPEATER }
+        ContactTarget { name, public_key, contact_type: ADV_TYPE_REPEATER, gps_lat: 0, gps_lon: 0 }
     }
-    
+
     /// Create a new room server contact target.
     pub fn room_server(name: String, public_key: NodeId) -> Self {
-        ContactTarget { name, public_key, contact_type: ADV_TYPE_ROOM_SERVER }
+        ContactTarget { name, public_key, contact_type: ADV_TYPE_ROOM_SERVER, gps_lat: 0, gps_lon: 0 }
+    }
+
+    /// Attach a pre-seeded position (microdegrees) to this contact.
+    pub fn with_gps(mut self, gps_lat: i32, gps_lon: i32) -> Self {
+        self.gps_lat = gps_lat;
+        self.gps_lon = gps_lon;
+        self
     }
 }
 
@@ -206,6 +233,9 @@ pub struct ChannelMessageConfig {
     /// Time before the agent stops sending.
     /// If None, the agent sends indefinitely.
     pub shutdown_s: Option<f64>,
+    /// Geo-corridor triples for scoped flood delivery.
+    /// If non-empty, the agent uses CMD_SEND_CHANNEL_TXT_MSG_CORRIDOR.
+    pub corridor: Vec<CorridorTriple>,
 }
 
 impl Default for ChannelMessageConfig {
@@ -223,6 +253,101 @@ impl Default for ChannelMessageConfig {
             session_interval_jitter_s: 0.0,
             message_count: None,
             shutdown_s: None,
+            corridor: Vec::new(),
+        }
+    }
+}
+
+/// Configuration for TRACE path sending behavior.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceConfig {
+    /// Whether TRACE sending is enabled.
+    pub enabled: bool,
+    /// Wait time before starting TRACE sends.
+    pub startup_s: f64,
+    /// Standard deviation in the randomness of the startup interval.
+    pub startup_jitter_s: f64,
+    /// Resolved path bytes (sequence of per-hop hash prefixes).
+    /// The destination is the final hash in the path.
+    pub path: Vec<u8>,
+    /// Interval after receiving a TraceData response (or timeout) before sending the next trace.
+    pub interval_s: f64,
+    /// Standard deviation of the randomness in the interval timer.
+    pub interval_jitter_s: f64,
+    /// Timeout waiting for a TraceData push before proceeding.
+    pub response_timeout_s: f64,
+    /// Count of traces before the agent stops sending.
+    /// If None, the agent sends indefinitely.
+    pub message_count: Option<u32>,
+    /// Time before the agent stops sending.
+    /// If None, the agent sends indefinitely.
+    pub shutdown_s: Option<f64>,
+    /// TRACE tag (arbitrary identifier, echoed in TraceData).
+    pub tag: u32,
+    /// TRACE auth code (arbitrary identifier, echoed in TraceData).
+    pub auth: u32,
+    /// TRACE flags. Lower 2 bits select path hash size:
+    ///   0 = 1 byte/hash, 1 = 2 bytes/hash, 2 = 4 bytes/hash, 3 = 8 bytes/hash.
+    pub flags: u8,
+}
+
+impl Default for TraceConfig {
+    fn default() -> Self {
+        TraceConfig {
+            enabled: false,
+            startup_s: 0.0,
+            startup_jitter_s: 0.0,
+            path: Vec::new(),
+            interval_s: 5.0,
+            interval_jitter_s: 0.0,
+            response_timeout_s: 10.0,
+            message_count: None,
+            shutdown_s: None,
+            tag: 0,
+            auth: 0,
+            flags: 0,
+        }
+    }
+}
+
+/// Configuration for server login behavior (login to repeaters / room servers).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginConfig {
+    /// Whether login behavior is enabled.
+    pub enabled: bool,
+    /// Wait time before starting logins.
+    pub startup_s: f64,
+    /// Standard deviation in the randomness of the startup interval.
+    pub startup_jitter_s: f64,
+    /// Server node IDs (public keys) to log in to.
+    pub targets: Vec<NodeId>,
+    /// Password to send (empty string = no password).
+    pub password: String,
+    /// Timeout waiting for a LoginSuccess/LoginFail push before treating as failure.
+    pub response_timeout_s: f64,
+    /// Interval between finishing one target and starting the next (and before a retry).
+    pub interval_s: f64,
+    /// Standard deviation of the randomness in the interval timer.
+    pub interval_jitter_s: f64,
+    /// Max login attempts per target before giving up (1 = no retry).
+    pub max_attempts: u32,
+    /// If Some, repeat the whole login cycle after this many seconds (reconnect simulation).
+    pub repeat_login_s: Option<f64>,
+}
+
+impl Default for LoginConfig {
+    fn default() -> Self {
+        LoginConfig {
+            enabled: false,
+            startup_s: 0.0,
+            startup_jitter_s: 0.0,
+            targets: Vec::new(),
+            password: String::new(),
+            response_timeout_s: 10.0,
+            interval_s: 5.0,
+            interval_jitter_s: 0.0,
+            max_attempts: 1,
+            repeat_login_s: None,
         }
     }
 }
@@ -236,9 +361,17 @@ pub struct AgentConfig {
     pub direct: DirectMessageConfig,
     /// Channel message configuration.
     pub channel: ChannelMessageConfig,
+    /// TRACE path configuration.
+    pub trace: TraceConfig,
+    /// Server login configuration.
+    pub login: LoginConfig,
     /// Contacts to add to firmware's contact list at startup.
     /// Required for DM communication - firmware needs contacts to decrypt/ACK messages.
     pub contacts: Vec<ContactTarget>,
+    /// Offset (seconds) added to the *message* (plain/channel) timestamp the agent puts on
+    /// outgoing packets, modelling a Companion whose app clock diverges from its node RTC.
+    /// Login/CLI timestamps stay on the RTC and are unaffected. Positive = app clock ahead.
+    pub app_clock_offset_secs: f64,
 }
 
 impl Default for AgentConfig {
@@ -247,7 +380,10 @@ impl Default for AgentConfig {
             name: "Agent".to_string(),
             direct: DirectMessageConfig::default(),
             channel: ChannelMessageConfig::default(),
+            trace: TraceConfig::default(),
+            login: LoginConfig::default(),
             contacts: Vec::new(),
+            app_clock_offset_secs: 0.0,
         }
     }
 }
@@ -255,7 +391,7 @@ impl Default for AgentConfig {
 impl AgentConfig {
     /// Check if this agent has any messaging behavior enabled.
     pub fn is_enabled(&self) -> bool {
-        self.direct.enabled || self.channel.enabled
+        self.direct.enabled || self.channel.enabled || self.trace.enabled || self.login.enabled
     }
 }
 
@@ -293,6 +429,11 @@ pub enum ProtocolState {
 enum DirectMessageState {
     /// Waiting for startup timer.
     WaitingStartup,
+    /// Path warmup: sent a probe DM, waiting for ACK or timeout.
+    /// `remaining` is the number of warmup DMs left including this one.
+    WaitingWarmupAck { remaining: u32 },
+    /// Path warmup: waiting (session_interval_s) before sending the next probe DM.
+    WaitingWarmupInterval { remaining: u32 },
     /// Ready to send (idle).
     Idle,
     /// Waiting for interval timer after ack/timeout.
@@ -324,6 +465,23 @@ enum ChannelMessageState {
     Disabled,
 }
 
+/// State for the TRACE path sending state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TraceState {
+    /// Waiting for startup timer.
+    WaitingStartup,
+    /// Ready to send (idle).
+    Idle,
+    /// TRACE sent, waiting for TraceData push response.
+    WaitingResponse,
+    /// Waiting for interval timer after response/timeout.
+    WaitingInterval,
+    /// Permanently shut down (message_count or shutdown_s reached).
+    Shutdown,
+    /// Disabled.
+    Disabled,
+}
+
 // ============================================================================
 // Timer IDs
 // ============================================================================
@@ -338,6 +496,34 @@ const TIMER_CHANNEL_INTERVAL: u64 = 6;
 const TIMER_CHANNEL_SESSION: u64 = 7;
 const TIMER_DIRECT_SHUTDOWN: u64 = 8;
 const TIMER_CHANNEL_SHUTDOWN: u64 = 9;
+/// Separate timer for warmup DM ACK timeouts (avoids stale-timer interference with counted DMs).
+const TIMER_DIRECT_WARMUP_TIMEOUT: u64 = 10;
+const TIMER_TRACE_STARTUP: u64 = 11;
+const TIMER_TRACE_INTERVAL: u64 = 12;
+const TIMER_TRACE_RESPONSE_TIMEOUT: u64 = 13;
+const TIMER_TRACE_SHUTDOWN: u64 = 14;
+const TIMER_LOGIN_STARTUP: u64 = 15;
+const TIMER_LOGIN_RESPONSE_TIMEOUT: u64 = 16;
+const TIMER_LOGIN_INTERVAL: u64 = 17;
+
+/// State for the server-login state machine (login to repeaters / room servers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoginState {
+    /// Waiting for startup timer.
+    WaitingStartup,
+    /// Ready to log in to the next target.
+    Idle,
+    /// Login sent, waiting for LoginSuccess/LoginFail push (or timeout).
+    WaitingResponse,
+    /// Waiting for interval timer (between targets / before a retry).
+    WaitingInterval,
+    /// Waiting for repeat_login_s before re-logging-in to all targets.
+    WaitingRepeat,
+    /// Permanently shut down.
+    Shutdown,
+    /// Disabled.
+    Disabled,
+}
 
 // ============================================================================
 // Agent Entity
@@ -364,17 +550,38 @@ pub struct Agent {
     direct_state: DirectMessageState,
     direct_target_idx: usize,
     direct_session_count: u32,
+    // Retry bookkeeping for the outstanding counted DM: attempts already used
+    // (attempt numbers 0..=direct_attempts_used are spent) and what to resend.
+    direct_attempts_used: u32,
+    direct_current: Option<(PublicKeyPrefix, String, u32)>,
     
     // Channel message state
     channel_state: ChannelMessageState,
     channel_target_idx: usize,
     channel_session_count: u32,
-    
+
+    // TRACE state
+    trace_state: TraceState,
+
+    // Login state
+    login_state: LoginState,
+    login_target_idx: usize,
+    login_attempt: u32,
+    logins_succeeded: u32,
+    logins_failed: u32,
+
     // Message counters
     message_seq: u32,
     direct_messages_sent: u32,
     channel_messages_sent: u32,
+    trace_messages_sent: u32,
     messages_received: u32,
+
+    // ACK hash tracking for metrics correctness
+    // warmup_ack_hashes: hashes of warmup probe DMs (learned from Response::Sent in WaitingWarmupAck)
+    // counted_ack_hashes: hashes of counted DMs that have already been acked (dedup FLOOD retries)
+    warmup_ack_hashes: Vec<u32>,
+    counted_ack_hashes: std::collections::HashSet<u32>,
     
     // Metrics labels for this agent
     metrics_labels: MetricLabels,
@@ -404,7 +611,19 @@ impl Agent {
         } else {
             ChannelMessageState::Disabled
         };
-        
+
+        let trace_state = if config.trace.enabled {
+            TraceState::WaitingStartup
+        } else {
+            TraceState::Disabled
+        };
+
+        let login_state = if config.login.enabled {
+            LoginState::WaitingStartup
+        } else {
+            LoginState::Disabled
+        };
+
         Agent {
             id,
             config,
@@ -420,10 +639,21 @@ impl Agent {
             channel_state,
             channel_target_idx: 0,
             channel_session_count: 0,
+            trace_state,
+            login_state,
+            login_target_idx: 0,
+            login_attempt: 0,
+            logins_succeeded: 0,
+            logins_failed: 0,
             message_seq: 0,
+            direct_attempts_used: 0,
+            direct_current: None,
             direct_messages_sent: 0,
             channel_messages_sent: 0,
+            trace_messages_sent: 0,
             messages_received: 0,
+            warmup_ack_hashes: Vec::new(),
+            counted_ack_hashes: std::collections::HashSet::new(),
             metrics_labels,
         }
     }
@@ -442,7 +672,12 @@ impl Agent {
     pub fn channel_messages_sent(&self) -> u32 {
         self.channel_messages_sent
     }
-    
+
+    /// Get the total TRACE packets sent.
+    pub fn trace_messages_sent(&self) -> u32 {
+        self.trace_messages_sent
+    }
+
     /// Get the total messages received.
     pub fn messages_received(&self) -> u32 {
         self.messages_received
@@ -606,8 +841,8 @@ impl Agent {
             out_path: [0u8; MAX_PATH_SIZE],
             name: contact.name.clone(),
             last_advert_timestamp: 0,
-            gps_lat: 0,
-            gps_lon: 0,
+            gps_lat: contact.gps_lat,
+            gps_lon: contact.gps_lon,
             lastmod: 0,
         };
         
@@ -647,12 +882,38 @@ impl Agent {
                 self.config.channel.startup_jitter_s,
             );
             ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_CHANNEL_STARTUP });
-            
+
             // Schedule shutdown timer if configured
             if let Some(shutdown_s) = self.config.channel.shutdown_s {
                 let shutdown_delay = SimTime::from_secs(shutdown_s);
                 ctx.post_event(shutdown_delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_CHANNEL_SHUTDOWN });
             }
+        }
+
+        // Start TRACE state machine
+        if self.trace_state == TraceState::WaitingStartup {
+            let delay = self.jittered_delay(
+                ctx.rng(),
+                self.config.trace.startup_s,
+                self.config.trace.startup_jitter_s,
+            );
+            ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_TRACE_STARTUP });
+
+            // Schedule shutdown timer if configured
+            if let Some(shutdown_s) = self.config.trace.shutdown_s {
+                let shutdown_delay = SimTime::from_secs(shutdown_s);
+                ctx.post_event(shutdown_delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_TRACE_SHUTDOWN });
+            }
+        }
+
+        // Start login state machine
+        if self.login_state == LoginState::WaitingStartup {
+            let delay = self.jittered_delay(
+                ctx.rng(),
+                self.config.login.startup_s,
+                self.config.login.startup_jitter_s,
+            );
+            ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_LOGIN_STARTUP });
         }
     }
 
@@ -699,7 +960,9 @@ impl Agent {
         // Generate message content
         self.message_seq += 1;
         let content = format!("DM {} from {}", self.direct_messages_sent + 1, self.config.name);
-        let timestamp = ctx.time().as_secs_f64() as u32;
+        // App-clock divergence hook: message timestamps carry the (divergent) app clock,
+        // while login/CLI timestamps stay on the firmware RTC. Positive offset = app clock ahead.
+        let timestamp = (ctx.time().as_secs_f64() + self.config.app_clock_offset_secs) as u32;
         let recipient = PublicKeyPrefix::new(target.public_key_hash());
 
         ctx.tracer().log(TraceEvent::custom(
@@ -723,6 +986,8 @@ impl Agent {
             &self.metrics_labels.to_labels()
         ).increment(1);
 
+        self.direct_attempts_used = 0;
+        self.direct_current = Some((recipient, content.clone(), timestamp));
         self.send_command(
             ctx,
             &Command::SendTextMessage {
@@ -744,18 +1009,163 @@ impl Agent {
     }
 
     /// Handle ACK received for direct message.
-    fn handle_direct_ack(&mut self, ctx: &mut SimContext) {
-        if let DirectMessageState::WaitingAck { .. } = self.direct_state {
-            self.schedule_next_direct_or_session(ctx);
+    /// Advance the state machine in response to a SendConfirmed ACK.
+    ///
+    /// The `ack_hash` is compared against the expected hash to guard against
+    /// late warmup ACKs arriving in `WaitingAck` state (which would otherwise
+    /// prematurely advance the counted-DM state machine).
+    fn handle_direct_ack(&mut self, ack_hash: u32, ctx: &mut SimContext) {
+        match self.direct_state {
+            DirectMessageState::WaitingWarmupAck { remaining } => {
+                // Only advance if this ACK is actually for a warmup DM.
+                if self.warmup_ack_hashes.contains(&ack_hash) {
+                    self.advance_warmup_or_start_session(ctx, remaining);
+                }
+            }
+            DirectMessageState::WaitingAck { expected_ack } => {
+                // Only advance if ACK matches the currently-expected counted DM.
+                // A hash of 0 means Response::Sent hasn't arrived yet — ignore.
+                if expected_ack != 0 && expected_ack == ack_hash {
+                    self.direct_current = None;  // acked — nothing left to retry
+                    self.schedule_next_direct_or_session(ctx);
+                }
+            }
+            _ => {
+                // Late/stale ACK in a state we've moved past — ignore.
+            }
         }
     }
 
     /// Handle ACK timeout for direct message.
     fn handle_direct_timeout(&mut self, ctx: &mut SimContext) {
-        if let DirectMessageState::WaitingAck { .. } = self.direct_state {
-            debug!("Agent[{}]: Direct message ACK timeout", self.config.name);
-            self.schedule_next_direct_or_session(ctx);
+        match self.direct_state {
+            DirectMessageState::WaitingWarmupAck { remaining } => {
+                debug!("Agent[{}]: Warmup DM ACK timeout ({} remaining)", self.config.name, remaining);
+                self.advance_warmup_or_start_session(ctx, remaining);
+            }
+            DirectMessageState::WaitingAck { .. } => {
+                if self.direct_attempts_used < self.config.direct.retries {
+                    // Retry the same DM with attempt+1, like the companion app does — the
+                    // firmware's corridor auto-scoping keys on this: first flood attempt
+                    // corridor-scoped, retries within the latch window plain.
+                    self.direct_attempts_used += 1;
+                    if let Some((recipient, content, timestamp)) = self.direct_current.clone() {
+                        debug!(
+                            "Agent[{}]: Direct message ACK timeout, retrying (attempt {})",
+                            self.config.name, self.direct_attempts_used
+                        );
+                        ctx.tracer().log(TraceEvent::custom(
+                            Some(&self.config.name),
+                            self.id,
+                            ctx.time(),
+                            format!("Retrying DM (attempt {})", self.direct_attempts_used),
+                        ));
+                        mcsim_metrics::metrics::counter!(
+                            metric_defs::MESSAGE_SENT.name,
+                            &self.metrics_labels.to_labels()
+                        ).increment(1);
+                        self.send_command(
+                            ctx,
+                            &Command::SendTextMessage {
+                                text_type: TextType::Plain,
+                                attempt: self.direct_attempts_used as u8,
+                                timestamp,
+                                recipient_prefix: recipient,
+                                text: content,
+                            },
+                        );
+                        self.direct_state = DirectMessageState::WaitingAck { expected_ack: 0 };
+                        let timeout = SimTime::from_secs(self.config.direct.ack_timeout_s);
+                        ctx.post_event(timeout, vec![self.id], EventPayload::Timer { timer_id: TIMER_DIRECT_ACK_TIMEOUT });
+                        return;
+                    }
+                }
+                debug!("Agent[{}]: Direct message ACK timeout", self.config.name);
+                self.direct_current = None;
+                self.schedule_next_direct_or_session(ctx);
+            }
+            _ => {}
         }
+    }
+
+    /// After a warmup DM ACK or timeout: send next warmup DM or start real session.
+    fn advance_warmup_or_start_session(&mut self, ctx: &mut SimContext, remaining: u32) {
+        if remaining > 1 {
+            // More warmup DMs to send — wait session_interval_s then send next probe
+            self.direct_state = DirectMessageState::WaitingWarmupInterval { remaining: remaining - 1 };
+            let delay = self.jittered_delay(
+                ctx.rng(),
+                self.config.direct.session_interval_s,
+                self.config.direct.session_interval_jitter_s,
+            );
+            ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_DIRECT_SESSION });
+        } else {
+            // Warmup complete — start real counted session
+            debug!("Agent[{}]: Path warmup complete, starting counted session", self.config.name);
+            self.direct_state = DirectMessageState::Idle;
+            self.send_next_direct_message(ctx);
+        }
+    }
+
+    /// Send a single path-warmup (probe) DM to the first configured target.
+    /// Does NOT increment `direct_messages_sent` or record delivery metrics.
+    fn send_warmup_dm(&mut self, ctx: &mut SimContext, remaining: u32) {
+        if self.config.direct.targets.is_empty() {
+            warn!("Agent[{}]: No direct message targets for warmup, skipping", self.config.name);
+            self.direct_state = DirectMessageState::Idle;
+            self.send_next_direct_message(ctx);
+            return;
+        }
+
+        // Use the first target (don't advance the rotation index)
+        let target = &self.config.direct.targets[0];
+        // App-clock divergence hook: message timestamps carry the (divergent) app clock,
+        // while login/CLI timestamps stay on the firmware RTC. Positive offset = app clock ahead.
+        let timestamp = (ctx.time().as_secs_f64() + self.config.app_clock_offset_secs) as u32;
+        let recipient = PublicKeyPrefix::new(target.public_key_hash());
+
+        ctx.tracer().log(TraceEvent::custom(
+            Some(&self.config.name),
+            self.id,
+            ctx.time(),
+            format!(
+                "Sending warmup DM ({}/{}) to recipient_prefix={:?}",
+                self.config.direct.path_warmup_count - remaining + 1,
+                self.config.direct.path_warmup_count,
+                recipient.as_bytes(),
+            ),
+        ));
+
+        debug!(
+            "Agent[{}]: Sending warmup DM {}/{} to {:?}",
+            self.config.name,
+            self.config.direct.path_warmup_count - remaining + 1,
+            self.config.direct.path_warmup_count,
+            recipient.to_hex(),
+        );
+
+        self.send_command(
+            ctx,
+            &Command::SendTextMessage {
+                text_type: TextType::Plain,
+                attempt: 0,
+                timestamp,
+                recipient_prefix: recipient,
+                text: format!(
+                    "Warmup {}/{} from {}",
+                    self.config.direct.path_warmup_count - remaining + 1,
+                    self.config.direct.path_warmup_count,
+                    self.config.name,
+                ),
+            },
+        );
+
+        // Transition to waiting for warmup ACK; use a SEPARATE timer ID so that when the
+        // warmup times out and the counted session starts, a stale warmup timer cannot
+        // accidentally trigger the counted-DM timeout handler.
+        self.direct_state = DirectMessageState::WaitingWarmupAck { remaining };
+        let timeout = SimTime::from_secs(self.config.direct.ack_timeout_s);
+        ctx.post_event(timeout, vec![self.id], EventPayload::Timer { timer_id: TIMER_DIRECT_WARMUP_TIMEOUT });
     }
 
     /// Schedule next direct message or session break.
@@ -814,7 +1224,9 @@ impl Agent {
         // Generate message content
         self.message_seq += 1;
         let content = format!("CH {} from {}", self.channel_messages_sent + 1, self.config.name);
-        let timestamp = ctx.time().as_secs_f64() as u32;
+        // App-clock divergence hook: message timestamps carry the (divergent) app clock,
+        // while login/CLI timestamps stay on the firmware RTC. Positive offset = app clock ahead.
+        let timestamp = (ctx.time().as_secs_f64() + self.config.app_clock_offset_secs) as u32;
 
         debug!(
             "Agent[{}]: Sending to channel {}: {}",
@@ -831,11 +1243,23 @@ impl Agent {
 
         self.send_command(
             ctx,
-            &Command::SendChannelTextMessage {
-                text_type: TextType::Plain,
-                channel_idx,
-                timestamp,
-                text: content,
+            &if self.config.channel.corridor.is_empty() {
+                Command::SendChannelTextMessage {
+                    text_type: TextType::Plain,
+                    channel_idx,
+                    timestamp,
+                    text: content,
+                }
+            } else {
+                Command::SendChannelTextMessageWithCorridor {
+                    text_type: TextType::Plain,
+                    channel_idx,
+                    timestamp,
+                    text: content,
+                    encoded_triples: self.config.channel.corridor.iter()
+                        .map(|t| t.encode())
+                        .collect(),
+                }
             },
         );
 
@@ -874,10 +1298,248 @@ impl Agent {
     }
 
     // ========================================================================
+    // TRACE State Machine
+    // ========================================================================
+
+    /// Send the next TRACE path packet.
+    fn send_next_trace(&mut self, ctx: &mut SimContext) {
+        // Check if we've hit the message count limit
+        if let Some(limit) = self.config.trace.message_count {
+            if self.trace_messages_sent >= limit {
+                debug!("Agent[{}]: TRACE message count limit reached ({})", self.config.name, limit);
+                self.trace_state = TraceState::Shutdown;
+                return;
+            }
+        }
+
+        if self.config.trace.path.is_empty() {
+            warn!("Agent[{}]: No TRACE path configured", self.config.name);
+            self.trace_state = TraceState::Disabled;
+            return;
+        }
+
+        // Increment tag/auth per trace so responses can be matched.
+        // The base values come from config; we add the sent-counter for uniqueness.
+        let tag = self.config.trace.tag.wrapping_add(self.trace_messages_sent);
+        let auth = self.config.trace.auth.wrapping_add(self.trace_messages_sent);
+
+        ctx.tracer().log(TraceEvent::custom(
+            Some(&self.config.name),
+            self.id,
+            ctx.time(),
+            format!(
+                "Sending TRACE tag={:08x} auth={:08x} flags={} path_len={} path={:02x?}",
+                tag, auth, self.config.trace.flags,
+                self.config.trace.path.len(),
+                self.config.trace.path
+            ),
+        ));
+
+        debug!(
+            "Agent[{}]: Sending TRACE tag={:08x} auth={:08x} path_len={}",
+            self.config.name, tag, auth, self.config.trace.path.len()
+        );
+
+        self.send_command(
+            ctx,
+            &Command::SendTracePath {
+                tag,
+                auth,
+                flags: self.config.trace.flags,
+                path: self.config.trace.path.clone(),
+            },
+        );
+
+        self.trace_messages_sent += 1;
+        self.trace_state = TraceState::WaitingResponse;
+
+        let timeout = SimTime::from_secs(self.config.trace.response_timeout_s);
+        ctx.post_event(timeout, vec![self.id], EventPayload::Timer { timer_id: TIMER_TRACE_RESPONSE_TIMEOUT });
+    }
+
+    /// Handle a TraceData push notification.
+    fn handle_trace_data(
+        &mut self,
+        tag: u32,
+        auth_code: u32,
+        flags: u8,
+        path_hashes: &[u8],
+        path_snrs: &[u8],
+        final_snr_x4: i8,
+        ctx: &mut SimContext,
+    ) {
+        // Decode SNRs (scaled by 4) for each hop.
+        let snrs_db: Vec<f32> = path_snrs.iter()
+            .map(|s| *s as f32 / 4.0)
+            .collect();
+        let final_snr_db = final_snr_x4 as f32 / 4.0;
+
+        ctx.tracer().log(TraceEvent::custom(
+            Some(&self.config.name),
+            self.id,
+            ctx.time(),
+            format!(
+                "TraceData received tag={:08x} auth={:08x} flags={} path_len={} path_hashes={:02x?} per_hop_snrs={:.1?} final_snr={:.1}",
+                tag, auth_code, flags, path_hashes.len(), path_hashes, snrs_db, final_snr_db
+            ),
+        ));
+
+        // Only advance our own sender state machine for responses matching the
+        // currently outstanding trace. We sent with tag/auth derived from
+        // config + (trace_messages_sent - 1).
+        let expected_tag = self.config.trace.tag.wrapping_add(self.trace_messages_sent.saturating_sub(1));
+        let expected_auth = self.config.trace.auth.wrapping_add(self.trace_messages_sent.saturating_sub(1));
+
+        if tag == expected_tag && auth_code == expected_auth {
+            debug!(
+                "Agent[{}]: TraceData matches outstanding trace, advancing state machine",
+                self.config.name
+            );
+            if self.trace_state == TraceState::WaitingResponse {
+                self.schedule_next_trace(ctx);
+            }
+        } else {
+            trace!(
+                "Agent[{}]: TraceData tag/auth mismatch (got {:08x}/{:08x}, expected {:08x}/{:08x})",
+                self.config.name, tag, auth_code, expected_tag, expected_auth
+            );
+        }
+    }
+
+    /// Handle TRACE response timeout.
+    fn handle_trace_timeout(&mut self, ctx: &mut SimContext) {
+        if self.trace_state == TraceState::WaitingResponse {
+            debug!("Agent[{}]: TRACE response timeout", self.config.name);
+            ctx.tracer().log(TraceEvent::custom(
+                Some(&self.config.name),
+                self.id,
+                ctx.time(),
+                format!(
+                    "TRACE response timeout after {} sent",
+                    self.trace_messages_sent
+                ),
+            ));
+            self.schedule_next_trace(ctx);
+        }
+    }
+
+    /// Schedule the next TRACE send.
+    fn schedule_next_trace(&mut self, ctx: &mut SimContext) {
+        self.trace_state = TraceState::WaitingInterval;
+        let delay = self.jittered_delay(
+            ctx.rng(),
+            self.config.trace.interval_s,
+            self.config.trace.interval_jitter_s,
+        );
+        ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_TRACE_INTERVAL });
+    }
+
+    // ========================================================================
     // Message Handling
     // ========================================================================
 
     /// Handle a received protocol message.
+    // ========================================================================
+    // Login State Machine
+    // ========================================================================
+
+    /// Send a login request to the current target.
+    fn send_next_login(&mut self, ctx: &mut SimContext) {
+        if self.config.login.targets.is_empty() {
+            warn!("Agent[{}]: No login targets configured", self.config.name);
+            self.login_state = LoginState::Disabled;
+            return;
+        }
+        if self.login_target_idx >= self.config.login.targets.len() {
+            self.login_state = LoginState::Shutdown;
+            return;
+        }
+
+        self.login_attempt += 1;
+        let target = self.config.login.targets[self.login_target_idx];
+        let public_key = PublicKey(target.0);
+
+        ctx.tracer().log(TraceEvent::custom(
+            Some(&self.config.name),
+            self.id,
+            ctx.time(),
+            format!(
+                "Sending login to server (target #{}, attempt {}/{})",
+                self.login_target_idx, self.login_attempt, self.config.login.max_attempts
+            ),
+        ));
+        debug!(
+            "Agent[{}]: Sending login to {:?}",
+            self.config.name, &target.0[..8]
+        );
+
+        self.send_command(
+            ctx,
+            &Command::SendLogin {
+                public_key,
+                password: self.config.login.password.clone(),
+            },
+        );
+
+        self.login_state = LoginState::WaitingResponse;
+        let timeout = SimTime::from_secs(self.config.login.response_timeout_s);
+        ctx.post_event(
+            timeout,
+            vec![self.id],
+            EventPayload::Timer { timer_id: TIMER_LOGIN_RESPONSE_TIMEOUT },
+        );
+    }
+
+    /// Advance to the next login target, repeat the cycle, or shut down.
+    fn advance_login(&mut self, ctx: &mut SimContext) {
+        self.login_attempt = 0;
+        self.login_target_idx += 1;
+        if self.login_target_idx < self.config.login.targets.len() {
+            self.login_state = LoginState::WaitingInterval;
+            let delay = self.jittered_delay(
+                ctx.rng(),
+                self.config.login.interval_s,
+                self.config.login.interval_jitter_s,
+            );
+            ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_LOGIN_INTERVAL });
+        } else if let Some(repeat_s) = self.config.login.repeat_login_s {
+            self.login_target_idx = 0;
+            self.login_state = LoginState::WaitingRepeat;
+            ctx.post_event(
+                SimTime::from_secs(repeat_s),
+                vec![self.id],
+                EventPayload::Timer { timer_id: TIMER_LOGIN_INTERVAL },
+            );
+        } else {
+            self.login_state = LoginState::Shutdown;
+        }
+    }
+
+    /// Handle a failed or timed-out login: retry the same target or advance.
+    fn handle_login_failure(&mut self, ctx: &mut SimContext, reason: &str) {
+        ctx.tracer().log(TraceEvent::custom(
+            Some(&self.config.name),
+            self.id,
+            ctx.time(),
+            format!(
+                "Login {} (target #{}, attempt {}/{})",
+                reason, self.login_target_idx, self.login_attempt, self.config.login.max_attempts
+            ),
+        ));
+        if self.login_attempt < self.config.login.max_attempts {
+            self.login_state = LoginState::WaitingInterval;
+            let delay = self.jittered_delay(
+                ctx.rng(),
+                self.config.login.interval_s,
+                self.config.login.interval_jitter_s,
+            );
+            ctx.post_event(delay, vec![self.id], EventPayload::Timer { timer_id: TIMER_LOGIN_INTERVAL });
+        } else {
+            self.logins_failed += 1;
+            self.advance_login(ctx);
+        }
+    }
+
     fn handle_message(&mut self, msg: Message, ctx: &mut SimContext) {
         match msg {
             Message::Response(resp) => self.handle_response(resp, ctx),
@@ -919,9 +1581,16 @@ impl Agent {
                     "Agent[{}]: Message sent, ack_hash=0x{:08x}",
                     self.config.name, expected_ack
                 );
-                // Update expected ack for direct messages
-                if let DirectMessageState::WaitingAck { .. } = self.direct_state {
-                    self.direct_state = DirectMessageState::WaitingAck { expected_ack };
+                match self.direct_state {
+                    DirectMessageState::WaitingAck { .. } => {
+                        // Update expected ack for counted DMs
+                        self.direct_state = DirectMessageState::WaitingAck { expected_ack };
+                    }
+                    DirectMessageState::WaitingWarmupAck { .. } => {
+                        // Track warmup DM hash so late ACKs can be filtered out of metrics
+                        self.warmup_ack_hashes.push(expected_ack);
+                    }
+                    _ => {}
                 }
             }
             Response::ContactMessageV2(msg) | Response::ContactMessageV3(msg) => {
@@ -986,23 +1655,26 @@ impl Agent {
             msg.text
         );
 
-        // Record metric for message received
-        mcsim_metrics::metrics::counter!(
-            metric_defs::MESSAGE_DELIVERED.name,
-            &self.metrics_labels.to_labels()
-        ).increment(1);
+        // Skip delivery metrics for warmup probe DMs (text starts with "Warmup ").
+        // Warmup DMs are path-discovery probes sent before the counted session; they
+        // should not inflate mcsim.dm.delivered or mcsim.dm.delivery_latency.
+        if !msg.text.starts_with("Warmup ") {
+            mcsim_metrics::metrics::counter!(
+                metric_defs::MESSAGE_DELIVERED.name,
+                &self.metrics_labels.to_labels()
+            ).increment(1);
 
-        // Record delivery latency based on message timestamp
-        // The timestamp is the send time in seconds (truncated to u32)
-        let receive_time_secs = ctx.time().as_secs_f64();
-        let send_time_secs = msg.timestamp as f64;
-        let latency_ms = (receive_time_secs - send_time_secs) * 1000.0;
-        
-        // Record latency (should always be non-negative in normal operation)
-        mcsim_metrics::metrics::histogram!(
-            metric_defs::MESSAGE_DELIVERY_LATENCY.name,
-            &self.metrics_labels.to_labels()
-        ).record(latency_ms);
+            // Record delivery latency based on message timestamp.
+            // The timestamp is the send time in seconds (truncated to u32).
+            let receive_time_secs = ctx.time().as_secs_f64();
+            let send_time_secs = msg.timestamp as f64;
+            let latency_ms = (receive_time_secs - send_time_secs) * 1000.0;
+
+            mcsim_metrics::metrics::histogram!(
+                metric_defs::MESSAGE_DELIVERY_LATENCY.name,
+                &self.metrics_labels.to_labels()
+            ).record(latency_ms);
+        }
     }
 
     /// Handle a received channel message.
@@ -1032,20 +1704,28 @@ impl Agent {
                     self.config.name, ack_hash, trip_time_ms
                 );
 
-                // Record metric for message acknowledged
-                mcsim_metrics::metrics::counter!(
-                    metric_defs::MESSAGE_ACKED.name,
-                    &self.metrics_labels.to_labels()
-                ).increment(1);
+                // Record metrics only for counted DMs (not warmup probes).
+                // - warmup_ack_hashes: set of hashes for warmup probe DMs (tracked via Response::Sent)
+                // - counted_ack_hashes: deduplicates FLOOD's multiple ACKs for the same counted DM
+                let is_warmup = self.warmup_ack_hashes.contains(&ack_hash);
+                if !is_warmup {
+                    let is_new = self.counted_ack_hashes.insert(ack_hash);
+                    if is_new {
+                        // First ACK for this counted DM — record metrics
+                        mcsim_metrics::metrics::counter!(
+                            metric_defs::MESSAGE_ACKED.name,
+                            &self.metrics_labels.to_labels()
+                        ).increment(1);
 
-                // Record ACK latency histogram
-                mcsim_metrics::metrics::histogram!(
-                    metric_defs::MESSAGE_ACK_LATENCY.name,
-                    &self.metrics_labels.to_labels()
-                ).record(trip_time_ms as f64);
+                        mcsim_metrics::metrics::histogram!(
+                            metric_defs::MESSAGE_ACK_LATENCY.name,
+                            &self.metrics_labels.to_labels()
+                        ).record(trip_time_ms as f64);
+                    }
+                }
 
-                // Handle direct message ACK
-                self.handle_direct_ack(ctx);
+                // Advance state machine only if this ACK is for the currently-expected DM.
+                self.handle_direct_ack(ack_hash, ctx);
             }
             PushNotification::MessageWaiting => {
                 // A message is waiting - send SyncNextMessage to retrieve it
@@ -1063,6 +1743,42 @@ impl Agent {
                     self.config.name,
                     public_key.to_hex()
                 );
+            }
+            PushNotification::TraceData {
+                path_len: _,
+                flags,
+                tag,
+                auth_code,
+                path_hashes,
+                path_snrs,
+                final_snr_x4,
+            } => {
+                self.handle_trace_data(
+                    tag,
+                    auth_code,
+                    flags,
+                    &path_hashes,
+                    &path_snrs,
+                    final_snr_x4,
+                    ctx,
+                );
+            }
+            PushNotification::LoginSuccess { server_prefix, .. } => {
+                self.logins_succeeded += 1;
+                ctx.tracer().log(TraceEvent::custom(
+                    Some(&self.config.name),
+                    self.id,
+                    ctx.time(),
+                    format!("Login SUCCESS from server {:?}", server_prefix.as_bytes()),
+                ));
+                if self.login_state == LoginState::WaitingResponse {
+                    self.advance_login(ctx);
+                }
+            }
+            PushNotification::LoginFail { server_prefix: _ } => {
+                if self.login_state == LoginState::WaitingResponse {
+                    self.handle_login_failure(ctx, "FAIL");
+                }
             }
             _ => {
                 trace!("Agent[{}]: Unhandled push: {:?}", self.config.name, push);
@@ -1089,8 +1805,13 @@ impl Entity for Agent {
                     TIMER_DIRECT_STARTUP => {
                         // Direct messaging startup complete
                         if self.protocol_state == ProtocolState::Ready {
-                            self.direct_state = DirectMessageState::Idle;
-                            self.send_next_direct_message(ctx);
+                            let warmup = self.config.direct.path_warmup_count;
+                            if warmup > 0 {
+                                self.send_warmup_dm(ctx, warmup);
+                            } else {
+                                self.direct_state = DirectMessageState::Idle;
+                                self.send_next_direct_message(ctx);
+                            }
                         }
                     }
                     TIMER_DIRECT_INTERVAL => {
@@ -1103,16 +1824,30 @@ impl Entity for Agent {
                         }
                     }
                     TIMER_DIRECT_ACK_TIMEOUT => {
-                        // ACK timeout for direct message
-                        self.handle_direct_timeout(ctx);
+                        // ACK timeout for counted direct messages — guard against stale timers.
+                        if matches!(self.direct_state, DirectMessageState::WaitingAck { .. }) {
+                            self.handle_direct_timeout(ctx);
+                        }
+                    }
+                    TIMER_DIRECT_WARMUP_TIMEOUT => {
+                        // ACK timeout for warmup probe DMs — guard against stale timers.
+                        if matches!(self.direct_state, DirectMessageState::WaitingWarmupAck { .. }) {
+                            self.handle_direct_timeout(ctx);
+                        }
                     }
                     TIMER_DIRECT_SESSION => {
-                        // Direct message session break complete
-                        if self.protocol_state == ProtocolState::Ready 
-                            && self.direct_state == DirectMessageState::WaitingSession 
-                        {
-                            self.direct_state = DirectMessageState::Idle;
-                            self.send_next_direct_message(ctx);
+                        // Direct message session break complete — also used for warmup intervals
+                        if self.protocol_state == ProtocolState::Ready {
+                            match self.direct_state {
+                                DirectMessageState::WaitingWarmupInterval { remaining } => {
+                                    self.send_warmup_dm(ctx, remaining);
+                                }
+                                DirectMessageState::WaitingSession => {
+                                    self.direct_state = DirectMessageState::Idle;
+                                    self.send_next_direct_message(ctx);
+                                }
+                                _ => {}
+                            }
                         }
                     }
                     TIMER_CHANNEL_STARTUP => {
@@ -1156,6 +1891,60 @@ impl Entity for Agent {
                         {
                             debug!("Agent[{}]: Channel message shutdown timer reached", self.config.name);
                             self.channel_state = ChannelMessageState::Shutdown;
+                        }
+                    }
+                    TIMER_TRACE_STARTUP => {
+                        // TRACE startup complete
+                        if self.protocol_state == ProtocolState::Ready {
+                            self.trace_state = TraceState::Idle;
+                            self.send_next_trace(ctx);
+                        }
+                    }
+                    TIMER_TRACE_INTERVAL => {
+                        // Time to send next TRACE
+                        if self.protocol_state == ProtocolState::Ready
+                            && self.trace_state == TraceState::WaitingInterval
+                        {
+                            self.trace_state = TraceState::Idle;
+                            self.send_next_trace(ctx);
+                        }
+                    }
+                    TIMER_TRACE_RESPONSE_TIMEOUT => {
+                        // Response timeout for TRACE
+                        if self.trace_state == TraceState::WaitingResponse {
+                            self.handle_trace_timeout(ctx);
+                        }
+                    }
+                    TIMER_TRACE_SHUTDOWN => {
+                        // TRACE shutdown timer fired
+                        if self.trace_state != TraceState::Disabled
+                            && self.trace_state != TraceState::Shutdown
+                        {
+                            debug!("Agent[{}]: TRACE shutdown timer reached", self.config.name);
+                            self.trace_state = TraceState::Shutdown;
+                        }
+                    }
+                    TIMER_LOGIN_STARTUP => {
+                        // Login startup complete
+                        if self.protocol_state == ProtocolState::Ready {
+                            self.login_state = LoginState::Idle;
+                            self.send_next_login(ctx);
+                        }
+                    }
+                    TIMER_LOGIN_RESPONSE_TIMEOUT => {
+                        // No LoginSuccess/LoginFail push in time
+                        if self.login_state == LoginState::WaitingResponse {
+                            self.handle_login_failure(ctx, "TIMEOUT");
+                        }
+                    }
+                    TIMER_LOGIN_INTERVAL => {
+                        // Next target / retry / repeat cycle
+                        if self.protocol_state == ProtocolState::Ready
+                            && (self.login_state == LoginState::WaitingInterval
+                                || self.login_state == LoginState::WaitingRepeat)
+                        {
+                            self.login_state = LoginState::Idle;
+                            self.send_next_login(ctx);
                         }
                     }
                     _ => {}

@@ -114,6 +114,14 @@ pub enum Response {
         path: Vec<u8>,
     },
 
+    /// Corridor proposal (reply to CMD_PROPOSE_CORRIDOR).
+    ProposeCorridor {
+        /// Proposal reason flags (tier bits, thin stretch, horizon-limited).
+        reason: u8,
+        /// Encoded corridor triples (32-bit wire words).
+        encoded_triples: Vec<u32>,
+    },
+
     /// Tuning parameters.
     TuningParams(TuningParams),
 
@@ -496,6 +504,36 @@ impl Response {
                     recv_timestamp,
                     path_len,
                     path,
+                })
+            }
+
+            RESP_CODE_PROPOSE_CORRIDOR => {
+                if frame.len() < 3 {
+                    return Err(ProtocolError::FrameTooShort {
+                        expected: 3,
+                        actual: frame.len(),
+                    });
+                }
+                let count = frame[2] as usize;
+                if count > 8 {
+                    return Err(ProtocolError::InvalidData(format!(
+                        "corridor triple count too large: {}",
+                        count
+                    )));
+                }
+                if frame.len() < 3 + 4 * count {
+                    return Err(ProtocolError::FrameTooShort {
+                        expected: 3 + 4 * count,
+                        actual: frame.len(),
+                    });
+                }
+                let encoded_triples = frame[3..3 + 4 * count]
+                    .chunks_exact(4)
+                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+                Ok(Response::ProposeCorridor {
+                    reason: frame[1],
+                    encoded_triples,
                 })
             }
 
@@ -1178,4 +1216,78 @@ fn decode_channel_message_v3(data: &[u8]) -> Result<ReceivedChannelMessage, Prot
         snr_x4: Some(snr_x4),
         text,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_propose_corridor() {
+        // [29][reason][count][triple(4) x count]
+        let mut frame = vec![RESP_CODE_PROPOSE_CORRIDOR, 0x89, 3];
+        frame.extend_from_slice(&0x01234567u32.to_le_bytes());
+        frame.extend_from_slice(&0x89ABCDEFu32.to_le_bytes());
+        frame.extend_from_slice(&0x00000000u32.to_le_bytes());
+        let resp = Response::decode(&frame).expect("should decode");
+        match resp {
+            Response::ProposeCorridor { reason, encoded_triples } => {
+                assert_eq!(reason, 0x89);
+                assert_eq!(encoded_triples, vec![0x01234567, 0x89ABCDEF, 0x00000000]);
+            }
+            other => panic!("wrong variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_propose_corridor_empty() {
+        let frame = vec![RESP_CODE_PROPOSE_CORRIDOR, 0x00, 0];
+        let resp = Response::decode(&frame).expect("should decode");
+        match resp {
+            Response::ProposeCorridor { reason, encoded_triples } => {
+                assert_eq!(reason, 0);
+                assert!(encoded_triples.is_empty());
+            }
+            other => panic!("wrong variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_propose_corridor_count_too_large() {
+        let frame = vec![RESP_CODE_PROPOSE_CORRIDOR, 0x00, 9];
+        assert!(matches!(
+            Response::decode(&frame),
+            Err(ProtocolError::InvalidData(_))
+        ));
+    }
+
+    #[test]
+    fn test_decode_propose_corridor_frame_too_short() {
+        let frame = vec![RESP_CODE_PROPOSE_CORRIDOR, 0x00, 2, 0x01];
+        assert!(matches!(
+            Response::decode(&frame),
+            Err(ProtocolError::FrameTooShort { expected: 11, actual: 4 })
+        ));
+        assert!(matches!(
+            Response::decode(&[RESP_CODE_PROPOSE_CORRIDOR, 0x00]),
+            Err(ProtocolError::FrameTooShort { expected: 3, actual: 2 })
+        ));
+    }
+
+    #[test]
+    fn test_decode_advert_path() {
+        let mut frame = vec![RESP_CODE_ADVERT_PATH];
+        frame.extend_from_slice(&0xAABBCCDDu32.to_le_bytes());
+        frame.push(2);
+        frame.extend_from_slice(&[0x11, 0x22]);
+        let resp = Response::decode(&frame).expect("should decode");
+        match resp {
+            Response::AdvertPath { recv_timestamp, path_len, path } => {
+                assert_eq!(recv_timestamp, 0xAABBCCDD);
+                assert_eq!(path_len, 2);
+                assert_eq!(path, vec![0x11, 0x22]);
+            }
+            other => panic!("wrong variant: {:?}", other),
+        }
+    }
 }

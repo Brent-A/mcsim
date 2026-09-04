@@ -100,6 +100,24 @@ struct CompanionSimNode : public SimNodeImpl {
             NodePrefs* prefs = mesh->getNodePrefs();
             strncpy(prefs->node_name, config.node_name, sizeof(prefs->node_name) - 1);
             prefs->node_name[sizeof(prefs->node_name) - 1] = '\0';
+
+            // Override firmware-level resend attempts from simulation config.
+            // Only when the firmware actually exposes this field (feature-detected
+            // by build.rs → SIM_FW_HAS_MAX_RESEND_ATTEMPTS), so mcsim builds against
+            // firmware branches that lack it.
+#ifdef SIM_FW_HAS_MAX_RESEND_ATTEMPTS
+            prefs->max_resend_attempts = config.max_resend_attempts < 6 ? config.max_resend_attempts : 2;
+#endif
+
+            // Propagate geographic position so that corridor proposals (opcode 67)
+            // and the firmware-internal auto-corridor scoping carry the location
+            // from the topology.  Unlike the
+            // repeater, the companion keeps the live position in sensors.*
+            // (MyMesh::begin() already copied the empty prefs there before us).
+            prefs->node_lat = config.node_lat;
+            prefs->node_lon = config.node_lon;
+            sensors.node_lat = config.node_lat;
+            sensors.node_lon = config.node_lon;
         }
         
         // Initialize the serial interface with the simulated Serial stream

@@ -29,6 +29,10 @@ pub struct CliAgentConfig {
     pub password: Option<String>,
     /// List of CLI commands to execute at startup.
     pub commands: Vec<String>,
+    /// CLI commands to send at scheduled absolute sim times, for probing runtime state
+    /// (e.g. `clients`, `reach <hash>`, `get flood.suppress`) after the network has populated.
+    /// Each entry is `"@<seconds> <command>"` (parsed at construction).
+    pub scheduled: Vec<String>,
 }
 
 impl Default for CliAgentConfig {
@@ -37,6 +41,7 @@ impl Default for CliAgentConfig {
             name: "CliAgent".to_string(),
             password: None,
             commands: Vec::new(),
+            scheduled: Vec::new(),
         }
     }
 }
@@ -44,7 +49,7 @@ impl Default for CliAgentConfig {
 impl CliAgentConfig {
     /// Check if this CLI agent has any configuration to apply.
     pub fn has_configuration(&self) -> bool {
-        self.password.is_some() || !self.commands.is_empty()
+        self.password.is_some() || !self.commands.is_empty() || !self.scheduled.is_empty()
     }
 }
 
@@ -76,6 +81,11 @@ pub enum CliProtocolState {
 const TIMER_STARTUP: u64 = 0;
 const TIMER_NEXT_COMMAND: u64 = 1;
 
+/// Base timer id for scheduled (runtime-probe) commands. Each scheduled probe gets
+/// `TIMER_SCHEDULED_BASE + index`, so the timer id alone identifies which probe fired.
+/// Chosen well above the startup-command timer ids (0/1) to avoid collision.
+const TIMER_SCHEDULED_BASE: u64 = 0x100;
+
 /// Delay between commands to allow firmware processing (milliseconds).
 const COMMAND_DELAY_MS: u64 = 50;
 
@@ -100,7 +110,12 @@ pub struct CliAgent {
     
     // Command execution state
     command_index: usize,
-    
+
+    // Scheduled runtime probes (cli/scheduled): parsed (at_s, command), sorted by time.
+    scheduled_commands: Vec<(f64, String)>,
+    // The most recent scheduled probe awaiting a reply (for attributed trace logging).
+    last_probe: Option<String>,
+
     // Statistics
     commands_sent: u32,
     commands_succeeded: u32,
@@ -115,6 +130,9 @@ impl CliAgent {
         attached_node: NodeId,
         attached_firmware: EntityId,
     ) -> Self {
+        // Parse scheduled probes ("@<seconds> <command>") once, sorted by time.
+        let scheduled_commands = parse_scheduled(&config.scheduled);
+
         CliAgent {
             id,
             config,
@@ -123,6 +141,8 @@ impl CliAgent {
             codec: LineCodec::new(),
             state: CliProtocolState::Uninitialized,
             command_index: 0,
+            scheduled_commands,
+            last_probe: None,
             commands_sent: 0,
             commands_succeeded: 0,
             commands_failed: 0,
@@ -234,6 +254,26 @@ impl CliAgent {
         } else {
             // No password, skip to commands
             self.start_sending_commands(ctx);
+        }
+
+        // Schedule runtime probes (cli/scheduled) at absolute sim times. These are independent
+        // of the startup command sequence: each fires once at its target time and the reply is
+        // captured via the normal SerialTx path and traced as "CLI probe complete: ...".
+        for (i, (at_s, _cmd)) in self.scheduled_commands.iter().enumerate() {
+            let now = ctx.time();
+            let target = SimTime::from_secs(*at_s);
+            if target > now {
+                ctx.post_event(
+                    target - now,
+                    vec![self.id],
+                    EventPayload::Timer { timer_id: TIMER_SCHEDULED_BASE + i as u64 },
+                );
+            } else {
+                warn!(
+                    "CliAgent[{}]: scheduled probe @{}s is in the past (now={:?}); skipping",
+                    self.config.name, at_s, now
+                );
+            }
         }
     }
 
@@ -390,8 +430,19 @@ impl CliAgent {
                 self.schedule_next_command(ctx);
             }
             _ => {
-                trace!("CliAgent[{}]: Unexpected response in state {:?}: {:?}",
-                    self.config.name, self.state, response);
+                // Not in a startup-command exchange. If this is the reply to a scheduled
+                // runtime probe, attribute it; otherwise just trace it.
+                if let Some(cmd) = self.last_probe.take() {
+                    ctx.tracer().log(TraceEvent::custom(
+                        Some(&self.config.name),
+                        self.id,
+                        ctx.time(),
+                        format!("CLI probe complete: {} -> {:?}", cmd, response),
+                    ));
+                } else {
+                    trace!("CliAgent[{}]: Unexpected response in state {:?}: {:?}",
+                        self.config.name, self.state, response);
+                }
             }
         }
     }
@@ -425,6 +476,25 @@ impl Entity for CliAgent {
                             self.send_next_command(ctx);
                         }
                     }
+                    id if id >= TIMER_SCHEDULED_BASE => {
+                        // A scheduled runtime probe fired: send its command. Replies are
+                        // captured by the SerialTx path; we stash the command so the response
+                        // can be traced as "CLI probe complete: <cmd> -> <reply>".
+                        let idx = (id - TIMER_SCHEDULED_BASE) as usize;
+                        // Clone out of scheduled_commands so we don't hold an immutable borrow
+                        // of self across the mutable send_raw_command call below.
+                        let probe = self.scheduled_commands.get(idx).cloned();
+                        if let Some((at_s, cmd)) = probe {
+                            ctx.tracer().log(TraceEvent::custom(
+                                Some(&self.config.name),
+                                self.id,
+                                ctx.time(),
+                                format!("CLI probe send @{}s: {}", at_s, cmd),
+                            ));
+                            self.last_probe = Some(cmd.clone());
+                            self.send_raw_command(ctx, &cmd);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -455,6 +525,39 @@ impl Entity for CliAgent {
 // ============================================================================
 // Factory Functions
 // ============================================================================
+
+/// Parse `cli/scheduled` entries of the form `"@<seconds> <command>"` into `(secs, command)`,
+/// sorted ascending by time. Malformed entries are warned and skipped. A bare `@<secs>` with no
+/// command, a missing `@`, or non-numeric seconds all count as malformed.
+fn parse_scheduled(entries: &[String]) -> Vec<(f64, String)> {
+    let mut out = Vec::new();
+    for e in entries {
+        let s = e.trim();
+        let body = s.strip_prefix('@').map(|b| b.trim_start()).unwrap_or(s);
+        let (secs_str, cmd) = match body.split_once(char::is_whitespace) {
+            Some(p) => p,
+            None => {
+                warn!("CliAgent: malformed cli/scheduled entry '{e}' (expected '@<secs> <command>'); skipping");
+                continue;
+            }
+        };
+        let at_s: f64 = match secs_str.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                warn!("CliAgent: cli/scheduled entry '{e}' has non-numeric seconds '{secs_str}'; skipping");
+                continue;
+            }
+        };
+        let cmd = cmd.trim();
+        if cmd.is_empty() {
+            warn!("CliAgent: cli/scheduled entry '{e}' has empty command; skipping");
+            continue;
+        }
+        out.push((at_s, cmd.to_string()));
+    }
+    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    out
+}
 
 /// Create a new CLI agent.
 pub fn create_cli_agent(
@@ -488,6 +591,7 @@ mod tests {
             name: "Test".to_string(),
             password: Some("secret".to_string()),
             commands: Vec::new(),
+            scheduled: Vec::new(),
         };
         assert!(config.has_configuration());
     }
@@ -498,6 +602,37 @@ mod tests {
             name: "Test".to_string(),
             password: None,
             commands: vec!["set rxdelay 0".to_string()],
+            scheduled: Vec::new(),
+        };
+        assert!(config.has_configuration());
+    }
+
+    #[test]
+    fn test_parse_scheduled() {
+        let entries = vec![
+            "@250 clients".to_string(),
+            "  @30.5 neighbors ".to_string(),   // leading space + trailing space trimmed
+            "@120 reach 01020304".to_string(),   // command with argument preserved
+            "@bogus nope".to_string(),           // non-numeric seconds -> skipped
+            "@500".to_string(),                  // no command -> skipped
+        ];
+        let parsed = parse_scheduled(&entries);
+        // Sorted ascending by time; 2 malformed entries dropped.
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0], (30.5, "neighbors".to_string()));
+        assert_eq!(parsed[1], (120.0, "reach 01020304".to_string()));
+        assert_eq!(parsed[2], (250.0, "clients".to_string()));
+    }
+
+    #[test]
+    fn test_cli_agent_config_with_scheduled_only() {
+        // A node with only scheduled probes (no password/commands) must still count as
+        // having configuration so the model builder allocates a CliAgent for it.
+        let config = CliAgentConfig {
+            name: "Test".to_string(),
+            password: None,
+            commands: Vec::new(),
+            scheduled: vec!["@250 clients".to_string()],
         };
         assert!(config.has_configuration());
     }

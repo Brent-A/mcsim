@@ -1,0 +1,31 @@
+# Whitelist OFF (baseline). R1+R2 blacklist WL's key so its adverts never attach it
+# ("never checked in"). S sends 12 DMs to WL from t=150. Without the whitelist,
+# flood suppression may cancel both R1's and R2's rebroadcast (near set covered via
+# R3) and WL -- which cannot hear R3 -- loses the DM.
+nodes:
+  - name: "R1"
+    cli:
+      scheduled:
+        - "@30 blacklist add 05AFAA57"
+        - "@245 clients"
+        - "@350 get flood.suppress"
+  - name: "R2"
+    cli:
+      scheduled:
+        - "@30 blacklist add 05AFAA57"
+        - "@245 clients"
+        - "@350 get flood.suppress"
+  - name: "R3"
+    cli:
+      scheduled:
+        - "@245 clients"
+        - "@350 get flood.suppress"
+  - name: "S"
+    agent:
+      direct:
+        enabled: true
+        startup_s: 150
+        interval_s: 3
+        targets:
+          - "WL"
+        message_count: 12

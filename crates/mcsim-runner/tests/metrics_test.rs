@@ -978,3 +978,283 @@ fn test_wildcard_breakdown() {
         }
     }
 }
+
+// ============================================================================
+// Test 9: Geo-Corridor Scoped Flood
+// ============================================================================
+
+/// Verify that corridor-tagged channel messages are only forwarded by repeaters
+/// whose own geographic position lies inside the corridor.
+///
+/// Topology: corridor_l_shape
+///   - L-shaped corridor: west→corner→north, radius 3 km at each waypoint
+///   - Alice at WP1 (west end), Bob at WP3 (north end)
+///   - R_in_H: midpoint of horizontal leg  — INSIDE corridor
+///   - R_in_V: midpoint of vertical leg    — INSIDE corridor
+///   - R_out_SW: far south-west of WP1     — OUTSIDE corridor
+///   - R_out_N: north of horizontal leg    — OUTSIDE corridor
+///
+/// Expected behaviour:
+///   1. Alice sends exactly 1 corridor-tagged channel message (op 53, explicit triples).
+///   2. Inside repeaters (R_in_H, R_in_V) each forward the message once.
+///   3. Outside repeaters (R_out_SW, R_out_N) receive the message but drop it
+///      (corridor check → 0 TX for grp_txt).
+///   4. Bob receives the message via the inside-repeater chain.
+#[test]
+fn test_corridor_scoped_flood() {
+    let result = run_and_collect_metrics(
+        "examples/topologies/corridor_l_shape.yaml",
+        Some("examples/behaviors/corridor_broadcast.yaml"),
+        42,    // seed — deterministic
+        "30s", // duration — enough for 1 message + forwarding chain
+        &[
+            "mcsim.radio.tx_packets/node/payload_type",
+            "mcsim.radio.rx_packets/node/payload_type",
+        ],
+    );
+
+    eprintln!("Test 9: Geo-Corridor Scoped Flood");
+
+    // Helper: TX grp_txt count for a named node.
+    let tx_grp = |node: &str| -> u64 {
+        get_counter_for_labels(
+            &result,
+            "mcsim.radio.tx_packets",
+            &[("node", node), ("payload_type", "grp_txt")],
+        )
+        .unwrap_or(0)
+    };
+
+    // Helper: RX grp_txt count for a named node.
+    let rx_grp = |node: &str| -> u64 {
+        get_counter_for_labels(
+            &result,
+            "mcsim.radio.rx_packets",
+            &[("node", node), ("payload_type", "grp_txt")],
+        )
+        .unwrap_or(0)
+    };
+
+    // ── Sender ───────────────────────────────────────────────────────────────
+    let alice_tx = tx_grp("Alice");
+    eprintln!("  Alice TX grp_txt: {}", alice_tx);
+    assert_eq!(alice_tx, 1, "Alice must send exactly 1 corridor channel message");
+
+    // ── Inside repeaters — must forward ──────────────────────────────────────
+    let r_in_h_tx = tx_grp("R_in_H");
+    let r_in_v_tx = tx_grp("R_in_V");
+    eprintln!("  R_in_H  TX grp_txt: {} (inside corridor — expects >=1)", r_in_h_tx);
+    eprintln!("  R_in_V  TX grp_txt: {} (inside corridor — expects >=1)", r_in_v_tx);
+
+    assert!(
+        r_in_h_tx >= 1,
+        "R_in_H (inside horizontal leg, lat=47.61, lon=-122.375) must forward \
+         the corridor message. Got {} TX. \
+         Check: node_lat/node_lon propagation from YAML -> NodeConfig -> prefs, \
+         and isPointInCorridor() logic.",
+        r_in_h_tx
+    );
+    assert!(
+        r_in_v_tx >= 1,
+        "R_in_V (inside vertical leg, lat=47.635, lon=-122.35) must forward \
+         the corridor message. Got {} TX. \
+         Check: node_lat/node_lon propagation and corridor geometry.",
+        r_in_v_tx
+    );
+
+    // ── Outside repeaters — must NOT forward ─────────────────────────────────
+    let r_out_sw_tx = tx_grp("R_out_SW");
+    let r_out_n_tx  = tx_grp("R_out_N");
+    eprintln!("  R_out_SW TX grp_txt: {} (outside corridor — expects 0)", r_out_sw_tx);
+    eprintln!("  R_out_N  TX grp_txt: {} (outside corridor — expects 0)", r_out_n_tx);
+
+    assert_eq!(
+        r_out_sw_tx, 0,
+        "R_out_SW (lat=47.57, lon=-122.43, ~5 km SW of WP1) must NOT forward \
+         the corridor message. Got {} TX. \
+         Check: isPointInCorridor() returns false for this position.",
+        r_out_sw_tx
+    );
+    assert_eq!(
+        r_out_n_tx, 0,
+        "R_out_N (lat=47.645, lon=-122.40, ~3.9 km north of horizontal leg) must NOT forward \
+         the corridor message. Got {} TX. \
+         Check: isPointInCorridor() returns false for this position.",
+        r_out_n_tx
+    );
+
+    // ── Outside repeaters still receive Alice's original packet ──────────────
+    let r_out_sw_rx = rx_grp("R_out_SW");
+    let r_out_n_rx  = rx_grp("R_out_N");
+    eprintln!("  R_out_SW RX grp_txt: {} (should receive but drop)", r_out_sw_rx);
+    eprintln!("  R_out_N  RX grp_txt: {} (should receive but drop)", r_out_n_rx);
+    assert!(
+        r_out_sw_rx >= 1,
+        "R_out_SW must receive Alice's packet (to exercise the corridor-drop code path)"
+    );
+    assert!(
+        r_out_n_rx >= 1,
+        "R_out_N must receive Alice's packet (to exercise the corridor-drop code path)"
+    );
+
+    // ── Receiver — Bob must get the message via inside-repeater chain ─────────
+    let bob_rx = rx_grp("Bob");
+    eprintln!("  Bob RX grp_txt: {} (expects >=1)", bob_rx);
+    assert!(
+        bob_rx >= 1,
+        "Bob (north end of corridor) must receive the message via R_in_H / R_in_V. \
+         Got {} RX. Check inside-repeater forwarding and Bob's radio links.",
+        bob_rx
+    );
+}
+// ============================================================================
+// Test 10: Auto-Corridor Channel Scope (firmware-computed sender circle)
+// ============================================================================
+
+/// Verify the firmware-internal default scope for channel messages: a PLAIN
+/// channel send (op 3, no corridor configuration anywhere) carries a
+/// single-triple corridor — a 50 km circle around the sender (radius code 8) —
+/// attached by the companion's sendFloodScoped(GroupChannel) override.
+/// Repeaters outside the circle receive but geo-drop the packet.
+///
+/// Topology: corridor_auto_scope
+///   - Alice sender (47.61, -122.40)
+///   - R_in  4.8 km from Alice — INSIDE the 50 km circle (forwards)
+///   - R_out 84.4 km from Alice — OUTSIDE the circle (drops)
+///   - Bob reachable only via R_in (proves in-circle forwarding delivers)
+#[test]
+fn test_channel_auto_scope() {
+    let result = run_and_collect_metrics(
+        "examples/topologies/corridor_auto_scope.yaml",
+        Some("examples/behaviors/corridor_auto_broadcast.yaml"),
+        42,    // seed — deterministic
+        "30s", // duration — enough for 1 message + forwarding chain
+        &[
+            "mcsim.radio.tx_packets/node/payload_type",
+            "mcsim.radio.rx_packets/node/payload_type",
+        ],
+    );
+
+    eprintln!("Test 10: Auto-corridor channel scope (sender circle, 50 km)");
+
+    let tx_grp = |node: &str| -> u64 {
+        get_counter_for_labels(
+            &result,
+            "mcsim.radio.tx_packets",
+            &[("node", node), ("payload_type", "grp_txt")],
+        )
+        .unwrap_or(0)
+    };
+    let rx_grp = |node: &str| -> u64 {
+        get_counter_for_labels(
+            &result,
+            "mcsim.radio.rx_packets",
+            &[("node", node), ("payload_type", "grp_txt")],
+        )
+        .unwrap_or(0)
+    };
+
+    // Sender: exactly one (auto-corridor-scoped) channel message.
+    let alice_tx = tx_grp("Alice");
+    eprintln!("  Alice TX grp_txt: {}", alice_tx);
+    assert_eq!(alice_tx, 1, "Alice must send exactly 1 channel message");
+
+    // Inside the 50 km circle: forwards to Bob.
+    let r_in_tx = tx_grp("R_in");
+    eprintln!("  R_in  TX grp_txt: {} (inside circle — expects >=1)", r_in_tx);
+    assert!(r_in_tx >= 1, "R_in (4.8 km from Alice) must forward the channel message");
+
+    // Outside the circle: receives Alice's packet but must geo-drop it.
+    let r_out_tx = tx_grp("R_out");
+    let r_out_rx = rx_grp("R_out");
+    eprintln!("  R_out TX grp_txt: {} (outside circle — expects 0)", r_out_tx);
+    eprintln!("  R_out RX grp_txt: {} (should receive but drop)", r_out_rx);
+    assert_eq!(r_out_tx, 0, "R_out (84.4 km from Alice) must NOT forward — the auto-circle corridor must geo-drop it");
+    assert!(r_out_rx >= 1, "R_out must receive Alice's packet (to exercise the corridor-drop code path)");
+
+    // Bob: delivery via the in-circle repeater.
+    let bob_rx = rx_grp("Bob");
+    eprintln!("  Bob RX grp_txt: {} (expects >=1)", bob_rx);
+    assert!(bob_rx >= 1, "Bob must receive the channel message via R_in");
+}
+
+// ============================================================================
+// Test 11: DM Auto-Corridor with Plain-Flood Fallback
+// ============================================================================
+
+/// Verify the auto-corridor for contact floods (R2) and its retry fallback:
+/// Alice's DM to Bob has no direct path → the FIRST flood attempt is scoped by
+/// an auto-generated corridor toward Bob's stored position.  The only relay
+/// R_off sits 37.5 km off the Alice→Bob axis (outside the Tier-0 diamond), so
+/// the corridor attempt is geo-dropped.  Retries (attempt+1, within the
+/// firmware's corridor latch window) go as plain floods: R_off forwards them.
+/// Bob's first PATH+ACK return is itself corridor-scoped and dropped; the
+/// second return (Bob now latched) is plain and ACKs Alice.
+///
+/// Topology: corridor_dm_fallback
+///   - Alice (47.20, -122.40) → Bob (47.95, -122.40), 83 km apart
+///   - R_off the only relay, 56 km from each endpoint, far off-axis
+///
+/// Expected: Alice dm.sent == 3 (1 corridor + 2 plain retries), Bob delivered
+/// >= 1, Alice acked == 1; R_off forwards exactly the 2 plain attempts.
+#[test]
+fn test_dm_corridor_fallback() {
+    let result = run_and_collect_metrics(
+        "examples/topologies/corridor_dm_fallback.yaml",
+        Some("examples/behaviors/corridor_dm_retry.yaml"),
+        42,    // seed — deterministic
+        "30s", // duration — 3 attempts × 5 s ack timeout + propagation
+        &[
+            "mcsim.dm.sent/node",
+            "mcsim.dm.delivered/node",
+            "mcsim.dm.acked/node",
+            "mcsim.radio.tx_packets/node/payload_type",
+            "mcsim.radio.rx_packets/node/payload_type",
+        ],
+    );
+
+    eprintln!("Test 11: DM auto-corridor with plain-flood fallback");
+
+    let tx_txt = |node: &str| -> u64 {
+        get_counter_for_labels(
+            &result,
+            "mcsim.radio.tx_packets",
+            &[("node", node), ("payload_type", "txt_msg")],
+        )
+        .unwrap_or(0)
+    };
+    let rx_txt = |node: &str| -> u64 {
+        get_counter_for_labels(
+            &result,
+            "mcsim.radio.rx_packets",
+            &[("node", node), ("payload_type", "txt_msg")],
+        )
+        .unwrap_or(0)
+    };
+
+    // Alice: attempt 0 (corridor) + attempts 1..2 (plain retries).
+    let alice_sent = result.get_counter_for_node("mcsim.dm.sent", "Alice").unwrap_or(0);
+    eprintln!("  Alice mcsim.dm.sent: {} (expects 3)", alice_sent);
+    assert_eq!(alice_sent, 3, "Alice must send exactly 3 DM attempts (1 corridor + 2 plain retries)");
+
+    // R_off: receives all 3 attempts from Alice, forwards only the 2 plain ones.
+    let r_off_rx = rx_txt("R_off");
+    let r_off_tx = tx_txt("R_off");
+    eprintln!("  R_off RX txt_msg: {} (expects >=3)", r_off_rx);
+    eprintln!("  R_off TX txt_msg: {} (expects 2 — corridor attempt dropped)", r_off_tx);
+    assert!(r_off_rx >= 3, "R_off must receive all three DM attempts from Alice");
+    assert_eq!(
+        r_off_tx, 2,
+        "R_off must forward exactly the 2 plain-flood attempts — the corridor attempt (off-axis relay) must be geo-dropped"
+    );
+
+    // Bob: delivered via the plain-flood retry.
+    let bob_delivered = result.get_counter_for_node("mcsim.dm.delivered", "Bob").unwrap_or(0);
+    eprintln!("  Bob mcsim.dm.delivered: {} (expects >=1)", bob_delivered);
+    assert!(bob_delivered >= 1, "Bob must receive the DM via the plain-flood retry");
+
+    // Alice: final ACK arrives once Bob's PATH+ACK return also goes plain.
+    let alice_acked = result.get_counter_for_node("mcsim.dm.acked", "Alice").unwrap_or(0);
+    eprintln!("  Alice mcsim.dm.acked: {} (expects ==1)", alice_acked);
+    assert_eq!(alice_acked, 1, "Alice must be acked once (after Bob's latch expires its corridor return)");
+}

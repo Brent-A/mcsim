@@ -44,3 +44,6 @@ dem_data/*.tif
 
 # AWS terrain tile cache
 elevation_cache/
+
+/*.log
+/*.json

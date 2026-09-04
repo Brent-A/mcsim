@@ -1,0 +1,19 @@
+# Direct Message Behavior - With Warmup Delay
+# Alice sends 10 direct messages to Bob, but waits 60s for route discovery
+# to complete before the first message. Use this with marginal-link topologies
+# where the first few advertisement cycles may fail.
+#
+# Usage:
+#   cargo run -- run examples/topologies/simple_marginal.yaml examples/behaviors/multi_dm_warmup.yaml ...
+
+nodes:
+  - name: "Alice"
+    agent:
+      direct:
+        enabled: true
+        message_count: 10
+        session_message_count: 1
+        startup_s: 60
+        session_interval_s: 10
+        targets:
+          - "Bob"

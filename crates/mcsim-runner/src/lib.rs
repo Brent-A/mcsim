@@ -229,6 +229,13 @@ pub struct MessageReceivedPayload {
     pub direction: String,
 }
 
+/// Payload for a firmware log event.
+#[derive(Debug, Clone, Serialize)]
+pub struct FirmwareLogPayload {
+    /// Log line emitted by firmware.
+    pub line: String,
+}
+
 /// Payload types for different trace events.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
@@ -248,6 +255,9 @@ pub enum TracePayload {
     /// Message received.
     #[serde(rename = "MESSAGE")]
     MessageReceived(MessageReceivedPayload),
+    /// Firmware log output.
+    #[serde(rename = "LOG")]
+    FirmwareLog(FirmwareLogPayload),
 }
 
 /// A trace entry for output.
@@ -1311,6 +1321,11 @@ impl EventLoop {
             EventPayload::Timer { timer_id } => {
                 TracePayload::Timer(TimerPayload {
                     timer_id: *timer_id,
+                })
+            },
+            EventPayload::FirmwareLog(log_event) => {
+                TracePayload::FirmwareLog(FirmwareLogPayload {
+                    line: log_event.line.clone(),
                 })
             },
             _ => return, // Don't record other event types

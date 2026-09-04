@@ -1,0 +1,308 @@
+# Retry Showcase Extended Topology — 8-hop chain
+#
+# Demonstrates the value of repeated sending with a difficult 8-repeater chain.
+# Forward hops alternate between reliable, marginal (~87%), and bad (~70%).
+# The return path (ACKs/PATH) is always reliable — retries are the only rescue.
+#
+# Network topology (forward direction):
+#
+#                                          Observer
+#                                      (neighbor of R4 only)
+#                                            │
+#                                          12dB ±1σ
+#                                            │
+#  Alice ─15dB─► R1 ─-3dB─► R2 ─8dB─► R3 ─-5.4dB─► R4 ─-3dB─► R5 ─8dB─► R6 ─-5.4dB─► R7 ─-3dB─► R8 ─8dB─► Bob ─15dB─► Sidecar
+#        ◄─15dB──   ◄─-3dB──   ◄─8dB───   ◄─-5.4dB──    ◄─-3dB──   ◄─8dB───   ◄─-5.4dB──    ◄─-3dB──   ◄─8dB───       ◄─15dB──
+#
+# Forward hop and return path (ACK + PATH) qualities (all ±4σ on marginal/bad, ±2σ on reliable):
+#   Alice → R1:   15.0 dB ±2σ  → ~100%  reliable (Alice direct TX)
+#   R1 → R2:      -3.0 dB ±4σ  →  ~87%  MARGINAL
+#   R2 → R3:       8.0 dB ±2σ  → ~100%  reliable
+#   R3 → R4:      -5.4 dB ±4σ  →  ~70%  BAD
+#   R4 → R5:      -3.0 dB ±4σ  →  ~87%  MARGINAL
+#   R5 → R6:       8.0 dB ±2σ  → ~100%  reliable
+#   R6 → R7:      -5.4 dB ±4σ  →  ~70%  BAD
+#   R7 → R8:      -3.0 dB ±4σ  →  ~87%  MARGINAL
+#   R8 → Bob:      8.0 dB ±2σ  → ~100%  reliable
+#
+# Node roles:
+#   Alice    – Companion, DM sender                          [in communication]
+#   R1–R8    – Repeaters, chain between Alice and Bob        [in communication]
+#   Bob      – Companion, DM receiver                        [in communication]
+#   Observer – Repeater, neighbor of R4 only                 [NOT in communication]
+#   Sidecar  – Repeater, neighbor of Bob only                [NOT in communication]
+#
+# Neighbour relationships:
+#   Alice    knows: R1 only
+#   R1       knows: Alice, R2
+#   R2       knows: R1, R3
+#   R3       knows: R2, R4
+#   R4       knows: R3, R5, Observer
+#   R5       knows: R4, R6
+#   R6       knows: R5, R7
+#   R7       knows: R6, R8
+#   R8       knows: R7, Bob
+#   Bob      knows: R8, Sidecar
+#   Observer knows: R4 only
+#   Sidecar  knows: Bob only
+#
+# Expected delivery statistics per message attempt:
+#   FLOOD route (first DM, no path discovered yet):
+#     P(DM reaches Bob via FLOOD | 1 TX) = 0.87³ × 0.70² ≈ 32%
+#     Note: Alice's TX2/TX3 are blocked by R1's hasSeen ring-buffer — no retry benefit.
+#     A successful FLOOD DM causes Bob to reply with PATH+ACK, giving Alice Bob's route.
+#   DIRECT route (subsequent DMs after path discovery, max_resend_attempts=3 → 4 TX/hop):
+#     P(reliable hop fails | 4 TX) = 0.13⁴ ≈ 0.03%
+#     P(marginal hop fails  | 4 TX) = 0.30⁴ ≈ 0.81%
+#     P(DM reaches Bob via DIRECT | 4 TX/hop) = (1−0.13⁴)³ × (1−0.30⁴)² ≈ 98.3%
+#   → path_warmup_count=3 in behavior gives ≈68% chance of path discovery before counted session
+#
+# Run with:
+#   cargo run -- run examples/topologies/retry_showcase_ext.yaml \
+#                    examples/behaviors/retry_stress_ext.yaml    \
+#                    --duration 450s --seed 1234 --metrics-output json
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+    firmware:
+      max_resend_attempts: 3  # Default firmware-level retries (0=disabled, 1-5, default 2)
+
+nodes:
+  # ── Active communication path ────────────────────────────────────────────
+  - name: "Alice"
+    location:
+      lat: 47.6100
+      lon: -122.4200
+    firmware:
+      type: Companion
+    keys:
+      public_key: "0A*"
+
+  - name: "R1"
+    location:
+      lat: 47.6100
+      lon: -122.4022
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "01*"
+
+  - name: "R2"
+    location:
+      lat: 47.6100
+      lon: -122.3844
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "02*"
+
+  - name: "R3"
+    location:
+      lat: 47.6100
+      lon: -122.3667
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "03*"
+
+  - name: "R4"
+    location:
+      lat: 47.6100
+      lon: -122.3489
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "04*"
+
+  - name: "R5"
+    location:
+      lat: 47.6100
+      lon: -122.3311
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "05*"
+
+  - name: "R6"
+    location:
+      lat: 47.6100
+      lon: -122.3133
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "06*"
+
+  - name: "R7"
+    location:
+      lat: 47.6100
+      lon: -122.2956
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "07*"
+
+  - name: "R8"
+    location:
+      lat: 47.6100
+      lon: -122.2778
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "08*"
+
+  - name: "Bob"
+    location:
+      lat: 47.6100
+      lon: -122.2600
+    firmware:
+      type: Companion
+    keys:
+      public_key: "0B*"
+
+  # ── Nodes NOT on the Alice→Bob path ─────────────────────────────────────
+  - name: "Observer"
+    # Sits north of R4 (chain midpoint); reliable link to R4 only.
+    # Hears R4's forwarding; never a routing hop.
+    location:
+      lat: 47.6350
+      lon: -122.3489
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "09*"
+
+  - name: "Sidecar"
+    # Sits south of Bob; reliable link to Bob only.
+    # Hears Bob's ACKs; plays no role in DM delivery.
+    location:
+      lat: 47.5850
+      lon: -122.2600
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "0C*"
+
+edges:
+  # ── Alice ↔ R1: reliable both ways ──────────────────────────────────────
+  - from: "Alice"
+    to: "R1"
+    mean_snr_db_at20dbm: 15.0
+    snr_std_dev: 2.0
+  - from: "R1"
+    to: "Alice"
+    mean_snr_db_at20dbm: 15.0
+    snr_std_dev: 2.0
+
+  # ── R1 → R2: MARGINAL (DM forward) ──────────────────────────────────────
+  - from: "R1"
+    to: "R2"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+  # ── R2 → R1: reliable (ACK/PATH return) ─────────────────────────────────
+  - from: "R2"
+    to: "R1"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 2.0
+
+  # ── R2 → R3: reliable forward ────────────────────────────────────────────
+  - from: "R2"
+    to: "R3"
+    mean_snr_db_at20dbm: 8.0
+    snr_std_dev: 2.0
+  # ── R3 → R2: reliable (ACK/PATH return) ─────────────────────────────────
+  - from: "R3"
+    to: "R2"
+    mean_snr_db_at20dbm: 8.0
+    snr_std_dev: 2.0
+
+  # ── R3 → R4: BAD (DM forward) ────────────────────────────────────────────
+  - from: "R3"
+    to: "R4"
+    mean_snr_db_at20dbm: -5.4
+    snr_std_dev: 4.0
+  # ── R4 → R3: reliable (ACK/PATH return) ─────────────────────────────────
+  - from: "R4"
+    to: "R3"
+    mean_snr_db_at20dbm: -5.4
+    snr_std_dev: 2.0
+
+  # ── R4 → R5: MARGINAL (DM forward) ──────────────────────────────────────
+  - from: "R4"
+    to: "R5"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+  # ── R5 → R4: reliable (ACK/PATH return) ─────────────────────────────────
+  - from: "R5"
+    to: "R4"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 2.0
+
+  # ── R5 → R6: reliable forward ────────────────────────────────────────────
+  - from: "R5"
+    to: "R6"
+    mean_snr_db_at20dbm: 8.0
+    snr_std_dev: 2.0
+  # ── R6 → R5: reliable (ACK/PATH return) ─────────────────────────────────
+  - from: "R6"
+    to: "R5"
+    mean_snr_db_at20dbm: 8.0
+    snr_std_dev: 2.0
+
+  # ── R6 → R7: BAD (DM forward) ────────────────────────────────────────────
+  - from: "R6"
+    to: "R7"
+    mean_snr_db_at20dbm: -5.4
+    snr_std_dev: 4.0
+  # ── R7 → R6: reliable (ACK/PATH return) ─────────────────────────────────
+  - from: "R7"
+    to: "R6"
+    mean_snr_db_at20dbm: -5.4
+    snr_std_dev: 2.0
+
+  # ── R7 → R8: MARGINAL (DM forward) ──────────────────────────────────────
+  - from: "R7"
+    to: "R8"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+  # ── R8 → R7: reliable (ACK/PATH return) ─────────────────────────────────
+  - from: "R8"
+    to: "R7"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 2.0
+
+  # ── R8 → Bob: reliable forward (last hop) ────────────────────────────────
+  - from: "R8"
+    to: "Bob"
+    mean_snr_db_at20dbm: 8.0
+    snr_std_dev: 2.0
+  # ── Bob → R8: reliable (ACK return) ─────────────────────────────────────
+  - from: "Bob"
+    to: "R8"
+    mean_snr_db_at20dbm: 8.0
+    snr_std_dev: 2.0
+
+  # ── Observer: neighbor of R4 only ────────────────────────────────────────
+  - from: "R4"
+    to: "Observer"
+    mean_snr_db_at20dbm: 12.0
+    snr_std_dev: 1.0
+  - from: "Observer"
+    to: "R4"
+    mean_snr_db_at20dbm: 12.0
+    snr_std_dev: 1.0
+
+  # ── Sidecar: neighbor of Bob only ────────────────────────────────────────
+  - from: "Bob"
+    to: "Sidecar"
+    mean_snr_db_at20dbm: 15.0
+    snr_std_dev: 2.0
+  - from: "Sidecar"
+    to: "Bob"
+    mean_snr_db_at20dbm: 15.0
+    snr_std_dev: 2.0

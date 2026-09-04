@@ -1,0 +1,5 @@
+# Flood suppression OFF (unsuppressed baseline). Merge over e.g. multi_path.yaml.
+defaults:
+  node:
+    firmware:
+      flood_suppress: 0

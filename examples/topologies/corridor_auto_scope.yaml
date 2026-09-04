@@ -1,0 +1,92 @@
+# Auto-Corridor Channel Scope Network
+# Tests the firmware-internal default scope for channel messages: every channel
+# flood from a companion carries a single-triple corridor — a circle around the
+# SENDER's position with radius code 8 (50 km) — so channel traffic cannot
+# propagate unboundedly.  No corridor is configured anywhere (plain op 3 send).
+#
+# Geometry (auto circle around Alice, 50 km):
+#   Alice (47.6100, -122.4000)  ← sender
+#   R_in  (47.6500, -122.3750)  — 4.8 km from Alice → INSIDE the circle (forwards)
+#   Bob   (47.6600, -122.3500)  — 6.7 km from Alice → inside, hears only R_in
+#   R_out (46.8500, -122.4000)  — 84.4 km from Alice → OUTSIDE the circle (drops)
+#
+# Radio topology: Alice reaches both repeaters via explicit edges (R_out must
+# receive the packet to exercise the corridor-drop path).  Bob only hears R_in
+# so end-to-end delivery proves in-circle forwarding.
+#
+# Use with examples/behaviors/corridor_auto_broadcast.yaml:
+#   cargo run -- run examples/topologies/corridor_auto_scope.yaml \
+#                    examples/behaviors/corridor_auto_broadcast.yaml --duration 30s
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz:  62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+
+nodes:
+  # ── Companions ────────────────────────────────────────────────────────────
+  - name: "Alice"
+    location:
+      lat:  47.6100
+      lon: -122.4000
+    firmware:
+      type: Companion
+    keys:
+      public_key: "AA*"
+
+  - name: "Bob"
+    location:
+      lat:  47.6600
+      lon: -122.3500
+    firmware:
+      type: Companion
+    keys:
+      public_key: "BB*"
+
+  # ── Repeaters ──────────────────────────────────────────────────────────────
+  - name: "R_in"
+    location:
+      lat:  47.6500     # 4.8 km from Alice — inside the 50 km auto circle
+      lon: -122.3750
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "01*"
+
+  - name: "R_out"
+    location:
+      lat:  46.8500     # 84.4 km south of Alice — outside the 50 km auto circle
+      lon: -122.4000
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "02*"
+
+# ── Radio links ──────────────────────────────────────────────────────────────
+edges:
+  - from: "Alice"
+    to: "R_in"
+    mean_snr_db_at20dbm: 12.0
+  - from: "R_in"
+    to: "Alice"
+    mean_snr_db_at20dbm: 12.0
+
+  # R_out hears Alice (exercises the drop path) but its forwards reach nobody.
+  - from: "Alice"
+    to: "R_out"
+    mean_snr_db_at20dbm: 8.0
+  - from: "R_out"
+    to: "Alice"
+    mean_snr_db_at20dbm: 8.0
+
+  # Bob only hears R_in — delivery proves in-circle forwarding.
+  - from: "R_in"
+    to: "Bob"
+    mean_snr_db_at20dbm: 12.0
+  - from: "Bob"
+    to: "R_in"
+    mean_snr_db_at20dbm: 12.0

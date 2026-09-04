@@ -1,0 +1,15 @@
+# App-Clock Divergence Override
+#
+# Layered on top of login_then_msg.yaml (pass this file AFTER it): shifts the
+# Companion's *message/app* clock 1h ahead of its node RTC. Login/CLI timestamps
+# stay on the RTC and are unaffected. Combine with login_then_msg.yaml:
+#
+#   cargo run -- run examples/topologies/login_repro.yaml \
+#       examples/behaviors/login_then_msg.yaml \
+#       examples/behaviors/login_then_msg_offset.yaml \
+#       --duration 120s --seed 42 --output trace.json --trace "Companion,Repeater,RoomServer"
+
+nodes:
+  - name: "Companion"
+    agent:
+      app_clock_offset_secs: 3600   # app clock 1h ahead of node RTC

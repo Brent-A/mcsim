@@ -1,0 +1,110 @@
+# Amplifier Backup-Relay Test Topology
+#
+# Tests the amplifier mechanism: a repeater that has the designated next-hop as
+# a direct neighbor can serve as a backup relay if that hop fails to forward.
+#
+# Network topology:
+#
+#              R1  (marginal link to Bob — ~13% per-packet failure)
+#            /    \
+#   Alice          Bob
+#            \    /
+#              R2  (reliable link to Bob — backup amplifier)
+#
+# Cross-link R1 <-> R2 (reliable):
+#   - Enables R1 to appear in R2's neighbor table (via R1's advertisements).
+#   - Enables R2 to hear R1's relay to Bob and cancel its backup relay when
+#     R1 successfully forwards (avoiding unnecessary duplicate transmissions).
+#
+# Expected behavior:
+#   WITHOUT amplifier: ~87% delivery  (0.87 per hop, 1 hop via R1)
+#   WITH amplifier:    ~100% delivery (R2 backs up any R1->Bob failures)
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 910525000
+      bandwidth_hz: 62500
+      spreading_factor: 7
+      coding_rate: 5
+      tx_power_dbm: 20
+
+nodes:
+  - name: "Alice"
+    location:
+      lat: 47.6100
+      lon: -122.4000
+    firmware:
+      type: Companion
+    keys:
+      public_key: 0A*
+
+  - name: "Bob"
+    location:
+      lat: 47.6100
+      lon: -122.3000
+    firmware:
+      type: Companion
+    keys:
+      public_key: 0B*
+
+  - name: "Repeater1"
+    location:
+      lat: 47.6250
+      lon: -122.3500
+    firmware:
+      type: Repeater
+    keys:
+      public_key: 01*
+
+  - name: "Repeater2"
+    location:
+      lat: 47.5950
+      lon: -122.3500
+    firmware:
+      type: Repeater
+    keys:
+      public_key: 02*
+
+edges:
+  # Alice <-> both repeaters (reliable)
+  - from: "Alice"
+    to: "Repeater1"
+    mean_snr_db_at20dbm: 15.0
+  - from: "Repeater1"
+    to: "Alice"
+    mean_snr_db_at20dbm: 15.0
+
+  - from: "Alice"
+    to: "Repeater2"
+    mean_snr_db_at20dbm: 15.0
+  - from: "Repeater2"
+    to: "Alice"
+    mean_snr_db_at20dbm: 15.0
+
+  # R1 <-> R2 cross-link (reliable) — allows R1 to appear in R2's neighbor table
+  # and allows R2 to hear R1's relay to cancel its backup when R1 succeeds.
+  - from: "Repeater1"
+    to: "Repeater2"
+    mean_snr_db_at20dbm: 15.0
+  - from: "Repeater2"
+    to: "Repeater1"
+    mean_snr_db_at20dbm: 15.0
+
+  # R1 -> Bob: marginal link (designated path, ~13% per-packet failure)
+  - from: "Repeater1"
+    to: "Bob"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+  - from: "Bob"
+    to: "Repeater1"
+    mean_snr_db_at20dbm: -3.0
+    snr_std_dev: 4.0
+
+  # R2 -> Bob: reliable link (backup amplifier path)
+  - from: "Repeater2"
+    to: "Bob"
+    mean_snr_db_at20dbm: 15.0
+  - from: "Bob"
+    to: "Repeater2"
+    mean_snr_db_at20dbm: 15.0

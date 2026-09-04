@@ -1,0 +1,46 @@
+# Retry Stress Behavior — Extended (8-hop chain)
+#
+# Alice sends 20 direct messages to Bob across an 8-hop chain with
+# alternating reliable (87%) and marginal (70%) links.
+#
+# Path discovery recap:
+#   FLOOD route (no known path): P = 0.87³ × 0.70² ≈ 32% per attempt.
+#   Alice's TX2/TX3 are blocked by R1's hasSeen ring-buffer, so FLOOD
+#   delivery probability does NOT improve with retries.
+#
+#   path_warmup_count: 3  →  3 uncounted probe DMs before the counted session.
+#   P(at least one warmup succeeds) = 1 − (1−0.32)³ ≈ 68.5%
+#   When a warmup DM reaches Bob, he replies PATH+ACK and Alice learns the
+#   8-hop DIRECT route for all counted DMs.
+#
+# DIRECT route (after path discovery, max_resend_attempts=3 → 4 TX/hop):
+#   P(DM reaches Bob) = (1−0.13⁴)³ × (1−0.30⁴)² ≈ 98.3%
+#
+# Timing budget (--duration 450s, startup_s=90):
+#   Warmup phase:  3 × (5 s ack_timeout + 10 s session_interval) ≤ 45 s
+#   Counted session starts at: 90 + 45 = 135 s (worst case, all warmups fail)
+#   9-hop DIRECT round-trip: 9 × 164 ms + 200 ms TXT_ACK_DELAY ≈ 3.5 s
+#   Per counted DM (success): 3.5 s delivery + 10 s interval = 13.5 s
+#   Per counted DM (timeout): 5 s timeout + 10 s interval = 15 s
+#   20 DMs (all success): 135 + 20 × 13.5 = 405 s → fits in 450 s with margin
+#
+# Designed for use with retry_showcase_ext.yaml (--duration 450s).
+#
+# Run with:
+#   cargo run -- run examples/topologies/retry_showcase_ext.yaml \
+#                    examples/behaviors/retry_stress_ext.yaml    \
+#                    --duration 450s --seed 1234 --metrics-output json
+
+nodes:
+  - name: "Alice"
+    agent:
+      direct:
+        enabled: true
+        message_count: 20
+        session_message_count: 1
+        startup_s: 90
+        ack_timeout_s: 5
+        session_interval_s: 10
+        path_warmup_count: 3
+        targets:
+          - "Bob"

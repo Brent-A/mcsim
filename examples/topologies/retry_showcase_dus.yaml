@@ -1,0 +1,356 @@
+# Real-World Link Showcase — DUS Region, Trace Tag A0120863
+#
+# A faithful simulation of an observed 11-repeater, 12-hop path between Alice
+# and Bob in the Düsseldorf (DUS) area, sourced from:
+#   https://analyzer.letsmesh.net/traces?region=dus
+#
+# All forward link SNR values are taken directly from packet observations in
+# the trace.  Links are modelled as symmetric (same SNR both directions) to
+# reflect real-world conditions.  The final hop (R11 → Bob) is not captured
+# by the trace (Bob is an endpoint, not an observing repeater) and is assumed
+# reliable (10 dB, ±2σ).
+#
+# Radio: SF9 / 125 kHz / 868.1 MHz / 20 dBm (European LoRa standard).
+# SNR demodulation threshold at SF9: −12.5 dB.
+# (The observed −11.50 dB hop is below the SF7 floor; SF9 is required for
+# all measured SNR values to be above the demodulation threshold.)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Network topology (all links bidirectional / symmetric):
+#
+#  Alice ─13.25─ R1 ─12.75─ R2 ─-11.50─ R3 ─-4.50─ R4 ─11.00─ R5 ─-6.00─ R6
+#         (46)        (1e)          (5e)          (9b)         (44)        (05)
+#
+#         R6 ─-0.25─ R7 ─-5.75─ R8 ─10.00─ R9 ─-7.75─ R10 ─-9.00─ R11 ─10.00*─ Bob
+#               (44)        (9b)         (5e)          (1e)          (46)
+#
+# Hex IDs in parentheses are the last observed address byte of each repeater.
+# Five IDs appear twice (46, 1e, 5e, 9b, 44) — each is a distinct physical
+# node sharing the same address byte.  They are named R1–R11 positionally.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Link qualities (SF9, threshold −12.5 dB; P = Φ((μ + 12.5) / σ)):
+#
+#   Hop         Hex ID     SNR (dB)   σ    P(decode)   Quality
+#   ─────────────────────────────────────────────────────────────────────────
+#   Alice ↔ R1  ??  → 46   13.25     2.0   ~100%       EXCELLENT
+#   R1    ↔ R2  46  → 1e   12.75     2.0   ~100%       EXCELLENT
+#   R2    ↔ R3  1e  → 5e  -11.50     4.0   ~60%        BAD  ← bottleneck
+#   R3    ↔ R4  5e  → 9b   -4.50     4.0   ~98%        GOOD
+#   R4    ↔ R5  9b  → 44   11.00     2.0   ~100%       EXCELLENT
+#   R5    ↔ R6  44  → 05   -6.00     4.0   ~95%        GOOD
+#   R6    ↔ R7  05  → 44   -0.25     4.0   ~100%       EXCELLENT
+#   R7    ↔ R8  44  → 9b   -5.75     4.0   ~95%        GOOD
+#   R8    ↔ R9  9b  → 5e   10.00     2.0   ~100%       EXCELLENT
+#   R9    ↔ R10 5e  → 1e   -7.75     4.0   ~88%        MARGINAL
+#   R10   ↔ R11 1e  → 46   -9.00     4.0   ~81%        BAD-MARGINAL
+#   R11   ↔ Bob 46  → ??   10.00*    2.0   ~100%       ASSUMED (not in trace)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Expected delivery statistics:
+#
+#   Non-excellent hops only (all others ≈ 100%):
+#     R2 ↔ R3:   60%     R5 ↔ R6:   95%     R6 ↔ R7:   100%
+#     R3 ↔ R4:   98%     R7 ↔ R8:   95%     R9 ↔ R10:   88%
+#                                             R10 ↔ R11:  81%
+#
+#   FLOOD route (first DM, path unknown):
+#     P(DM reaches Bob | 1 TX) ≈ 0.60 × 0.98 × 0.95 × 1.00 × 0.95 × 0.88 × 0.81
+#                               ≈ 38%
+#     Note: Alice's TX2/TX3 are blocked by R1's hasSeen ring-buffer — retries
+#     do NOT improve flood delivery.
+#     path_warmup_count=3  →  P(≥1 warmup reaches Bob) = 1 − (1−0.38)³ ≈ 76%
+#     A successful flood DM causes Bob to reply with PATH+ACK, giving Alice
+#     the 12-hop DIRECT route for all subsequent counted DMs.
+#
+#   DIRECT route (after path discovery, max_resend_attempts=3 → 4 TX/hop):
+#     Dominant bottleneck: R2 ↔ R3  → P(fail 4 TX) = 0.40⁴ ≈ 2.6%
+#                          R10 ↔ R11 → P(fail 4 TX) = 0.19⁴ ≈ 0.1%
+#                          R9  ↔ R10 → P(fail 4 TX) = 0.12⁴ ≈ 0.02%
+#     P(DM reaches Bob via DIRECT | 4 TX/hop) ≈ 97.3%
+#
+#   → Retries lift delivery from ~38% per attempt to ~97% per attempt.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Node roles:
+#   Alice   – Companion, DM sender                       [in communication]
+#   R1–R11  – Repeaters, 11-hop chain between Alice/Bob  [in communication]
+#   Bob     – Companion, DM receiver                     [in communication]
+#
+# Neighbour relationships (strict chain):
+#   Alice knows: R1 only
+#   R1    knows: Alice, R2
+#   R2    knows: R1, R3
+#   R3    knows: R2, R4
+#   R4    knows: R3, R5
+#   R5    knows: R4, R6
+#   R6    knows: R5, R7
+#   R7    knows: R6, R8
+#   R8    knows: R7, R9
+#   R9    knows: R8, R10
+#   R10   knows: R9, R11
+#   R11   knows: R10, Bob
+#   Bob   knows: R11 only
+#
+# Locations: linear chain in Düsseldorf, Germany (~7.9 km W→E at 51.2090°N).
+#
+# Run with:
+#   cargo run -- run examples/topologies/retry_showcase_dus.yaml \
+#                    examples/behaviors/retry_stress_ext.yaml    \
+#                    --duration 600s --seed 1234 --metrics-output json
+#
+# Note: SF9 packets have ~2× longer airtime than the SF7/62.5 kHz ext-showcase.
+# --duration 600s (vs 450s) accommodates the longer round-trip on 12 hops.
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 868100000
+      bandwidth_hz: 125000
+      spreading_factor: 9
+      coding_rate: 5
+      tx_power_dbm: 20
+    firmware:
+      max_resend_attempts: 3  # 1 initial send + 3 retries = 4 TX attempts per hop
+
+nodes:
+  # ── Active communication path ─────────────────────────────────────────────
+  - name: "Alice"
+    location:
+      lat: 51.2090
+      lon: 6.7285
+    firmware:
+      type: Companion
+    keys:
+      public_key: "0A*"
+
+  - name: "R1"           # Observed hex ID: 46
+    location:
+      lat: 51.2090
+      lon: 6.7389
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "01*"
+
+  - name: "R2"           # Observed hex ID: 1e
+    location:
+      lat: 51.2090
+      lon: 6.7493
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "02*"
+
+  - name: "R3"           # Observed hex ID: 5e
+    location:
+      lat: 51.2090
+      lon: 6.7597
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "03*"
+
+  - name: "R4"           # Observed hex ID: 9b
+    location:
+      lat: 51.2090
+      lon: 6.7701
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "04*"
+
+  - name: "R5"           # Observed hex ID: 44
+    location:
+      lat: 51.2090
+      lon: 6.7805
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "05*"
+
+  - name: "R6"           # Observed hex ID: 05
+    location:
+      lat: 51.2090
+      lon: 6.7909
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "06*"
+
+  - name: "R7"           # Observed hex ID: 44  (distinct node; same address byte as R5)
+    location:
+      lat: 51.2090
+      lon: 6.8013
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "07*"
+
+  - name: "R8"           # Observed hex ID: 9b  (distinct node; same address byte as R4)
+    location:
+      lat: 51.2090
+      lon: 6.8117
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "08*"
+
+  - name: "R9"           # Observed hex ID: 5e  (distinct node; same address byte as R3)
+    location:
+      lat: 51.2090
+      lon: 6.8221
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "09*"
+
+  - name: "R10"          # Observed hex ID: 1e  (distinct node; same address byte as R2)
+    location:
+      lat: 51.2090
+      lon: 6.8325
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "0D*"
+
+  - name: "R11"          # Observed hex ID: 46  (distinct node; same address byte as R1)
+    location:
+      lat: 51.2090
+      lon: 6.8429
+    firmware:
+      type: Repeater
+    keys:
+      public_key: "0E*"
+
+  - name: "Bob"
+    location:
+      lat: 51.2090
+      lon: 6.8533
+    firmware:
+      type: Companion
+    keys:
+      public_key: "0B*"
+
+edges:
+  # ── Alice ↔ R1 (hex 46): 13.25 dB — EXCELLENT ────────────────────────────
+  - from: "Alice"
+    to: "R1"
+    mean_snr_db_at20dbm: 13.25
+    snr_std_dev: 2.0
+  - from: "R1"
+    to: "Alice"
+    mean_snr_db_at20dbm: 13.25
+    snr_std_dev: 2.0
+
+  # ── R1 ↔ R2 (hex 46↔1e): 12.75 dB — EXCELLENT ───────────────────────────
+  - from: "R1"
+    to: "R2"
+    mean_snr_db_at20dbm: 12.75
+    snr_std_dev: 2.0
+  - from: "R2"
+    to: "R1"
+    mean_snr_db_at20dbm: 12.75
+    snr_std_dev: 2.0
+
+  # ── R2 ↔ R3 (hex 1e↔5e): -11.50 dB — BAD / BOTTLENECK (~60 % per TX) ───
+  - from: "R2"
+    to: "R3"
+    mean_snr_db_at20dbm: -11.50
+    snr_std_dev: 4.0
+  - from: "R3"
+    to: "R2"
+    mean_snr_db_at20dbm: -11.50
+    snr_std_dev: 4.0
+
+  # ── R3 ↔ R4 (hex 5e↔9b): -4.50 dB — GOOD (~98 % per TX) ────────────────
+  - from: "R3"
+    to: "R4"
+    mean_snr_db_at20dbm: -4.50
+    snr_std_dev: 4.0
+  - from: "R4"
+    to: "R3"
+    mean_snr_db_at20dbm: -4.50
+    snr_std_dev: 4.0
+
+  # ── R4 ↔ R5 (hex 9b↔44): 11.00 dB — EXCELLENT ───────────────────────────
+  - from: "R4"
+    to: "R5"
+    mean_snr_db_at20dbm: 11.00
+    snr_std_dev: 2.0
+  - from: "R5"
+    to: "R4"
+    mean_snr_db_at20dbm: 11.00
+    snr_std_dev: 2.0
+
+  # ── R5 ↔ R6 (hex 44↔05): -6.00 dB — GOOD (~95 % per TX) ────────────────
+  - from: "R5"
+    to: "R6"
+    mean_snr_db_at20dbm: -6.00
+    snr_std_dev: 4.0
+  - from: "R6"
+    to: "R5"
+    mean_snr_db_at20dbm: -6.00
+    snr_std_dev: 4.0
+
+  # ── R6 ↔ R7 (hex 05↔44): -0.25 dB — EXCELLENT (~100 % per TX) ──────────
+  - from: "R6"
+    to: "R7"
+    mean_snr_db_at20dbm: -0.25
+    snr_std_dev: 4.0
+  - from: "R7"
+    to: "R6"
+    mean_snr_db_at20dbm: -0.25
+    snr_std_dev: 4.0
+
+  # ── R7 ↔ R8 (hex 44↔9b): -5.75 dB — GOOD (~95 % per TX) ────────────────
+  - from: "R7"
+    to: "R8"
+    mean_snr_db_at20dbm: -5.75
+    snr_std_dev: 4.0
+  - from: "R8"
+    to: "R7"
+    mean_snr_db_at20dbm: -5.75
+    snr_std_dev: 4.0
+
+  # ── R8 ↔ R9 (hex 9b↔5e): 10.00 dB — EXCELLENT ───────────────────────────
+  - from: "R8"
+    to: "R9"
+    mean_snr_db_at20dbm: 10.00
+    snr_std_dev: 2.0
+  - from: "R9"
+    to: "R8"
+    mean_snr_db_at20dbm: 10.00
+    snr_std_dev: 2.0
+
+  # ── R9 ↔ R10 (hex 5e↔1e): -7.75 dB — MARGINAL (~88 % per TX) ───────────
+  - from: "R9"
+    to: "R10"
+    mean_snr_db_at20dbm: -7.75
+    snr_std_dev: 4.0
+  - from: "R10"
+    to: "R9"
+    mean_snr_db_at20dbm: -7.75
+    snr_std_dev: 4.0
+
+  # ── R10 ↔ R11 (hex 1e↔46): -9.00 dB — BAD-MARGINAL (~81 % per TX) ──────
+  - from: "R10"
+    to: "R11"
+    mean_snr_db_at20dbm: -9.00
+    snr_std_dev: 4.0
+  - from: "R11"
+    to: "R10"
+    mean_snr_db_at20dbm: -9.00
+    snr_std_dev: 4.0
+
+  # ── R11 ↔ Bob (hex 46↔??): 10.00 dB — ASSUMED RELIABLE ──────────────────
+  # Final hop SNR not captured in trace (Bob is the receiving endpoint).
+  # A reliable value (10 dB, ±2σ) is assumed.
+  - from: "R11"
+    to: "Bob"
+    mean_snr_db_at20dbm: 10.00
+    snr_std_dev: 2.0
+  - from: "Bob"
+    to: "R11"
+    mean_snr_db_at20dbm: 10.00
+    snr_std_dev: 2.0

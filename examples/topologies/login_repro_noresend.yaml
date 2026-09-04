@@ -1,0 +1,66 @@
+# Login Reproduction Topology — repeated-sending OFF (max_resend_attempts: 0)
+#
+# Identical to login_repro.yaml except repeated-sending is disabled, mirroring the
+# bugfix/login-msg-timer behaviour. Used as the differential counterpart to
+# login_repro.yaml (max_resend_attempts: 2) to isolate the pr-2670 resend effect.
+#
+#   cargo run --release -- run examples/topologies/login_repro_noresend.yaml \
+#       examples/behaviors/login_then_msg.yaml \
+#       --duration 120s --seed 42 --output trace_resend0.json \
+#       --trace "Companion,Repeater,RoomServer"
+
+defaults:
+  node:
+    radio:
+      frequency_hz: 868100000      # EU 868.1 MHz
+      bandwidth_hz: 62500
+      spreading_factor: 9
+      coding_rate: 5
+      tx_power_dbm: 20
+    firmware:
+      max_resend_attempts: 0       # 0 disables repeated-sending
+
+nodes:
+  - name: "Companion"
+    location:
+      lat: 51.22770
+      lon: 6.77350
+    firmware:
+      type: Companion
+
+  - name: "Repeater"
+    location:
+      lat: 51.22780
+      lon: 6.77360
+    firmware:
+      type: Repeater
+
+  - name: "RoomServer"
+    location:
+      lat: 51.22790
+      lon: 6.77370
+    firmware:
+      type: RoomServer
+
+edges:
+  # All pairs in range, strong symmetric links (no radio issues).
+  - from: "Companion"
+    to: "Repeater"
+    mean_snr_db_at20dbm: 18.0
+  - from: "Repeater"
+    to: "Companion"
+    mean_snr_db_at20dbm: 18.0
+
+  - from: "Companion"
+    to: "RoomServer"
+    mean_snr_db_at20dbm: 18.0
+  - from: "RoomServer"
+    to: "Companion"
+    mean_snr_db_at20dbm: 18.0
+
+  - from: "Repeater"
+    to: "RoomServer"
+    mean_snr_db_at20dbm: 18.0
+  - from: "RoomServer"
+    to: "Repeater"
+    mean_snr_db_at20dbm: 18.0

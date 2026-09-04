@@ -1,0 +1,23 @@
+# Blacklist ON: GW blacklists the Spam node's 4-byte pubkey prefix (F86D26B9) at t=88.
+# Spam emits extra flood adverts before (@40,@60,@80) and after (@120,@140,@160,@180)
+# the switch -- GW must forward the first batch to Far and drop the second.
+# The @200 probes verify the learned-state cleanup (`clients` must NOT list F86D26B9).
+nodes:
+  - name: "Spam"
+    cli:
+      scheduled:
+        - "@40 advert"
+        - "@60 advert"
+        - "@80 advert"
+        - "@120 advert"
+        - "@140 advert"
+        - "@160 advert"
+        - "@180 advert"
+  - name: "GW"
+    cli:
+      scheduled:
+        - "@85 blacklist"
+        - "@88 blacklist add F86D26B9"
+        - "@91 blacklist"
+        - "@200 clients"
+        - "@205 get flood.suppress"

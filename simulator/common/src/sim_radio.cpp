@@ -9,6 +9,7 @@ SimRadio::SimRadio()
     , sf_(11)
     , cr_(5)
     , tx_power_(20)
+    , rx_boosted_gain_(false)
     , last_rssi_(-100.0f)
     , last_snr_(0.0f)
     , tx_pending_(false)
@@ -23,6 +24,7 @@ SimRadio::SimRadio()
     , last_polled_version_(0)
     , poll_count_(0)
     , recv_mode_(false)
+    , channel_noisy_latched_(false)
 {
 }
 
@@ -100,6 +102,7 @@ float SimRadio::packetScore(float snr, int packet_len) {
 
 bool SimRadio::startSendRaw(const uint8_t* bytes, int len) {
     if (tx_in_progress_) {
+        MESH_DEBUG_PRINTLN("SimRadio::startSendRaw(): tx already in progress, return false");
         return false;
     }
     
@@ -111,6 +114,7 @@ bool SimRadio::startSendRaw(const uint8_t* bytes, int len) {
     tx_len_ = len;
     tx_pending_ = true;
     tx_in_progress_ = true;
+    MESH_DEBUG_PRINTLN("SimRadio::startSendRaw(): tx in progress now");
     recv_mode_ = false;
     state_version_++;  // State changed - starting TX
     
@@ -138,8 +142,9 @@ void SimRadio::checkForSpin() {
         last_polled_version_ = state_version_;
         poll_count_ = 0;
         // Yield to give coordinator a chance to process
+        // Request an idle yield without overwriting non-idle reasons.
         if (g_sim_ctx) {
-            g_sim_ctx->step_result.reason = SIM_YIELD_IDLE;
+            g_sim_ctx->spin_config.spin_yield_requested = true;
         }
         return;
     }
@@ -166,7 +171,8 @@ void SimRadio::checkForSpin() {
                        poll_count_, threshold, g_sim_ctx->spin_config.spin_detection_count);
             }
             
-            g_sim_ctx->step_result.reason = SIM_YIELD_IDLE;
+            // Request an idle yield without overwriting non-idle reasons.
+            g_sim_ctx->spin_config.spin_yield_requested = true;
         }
         
         poll_count_ = 0;
@@ -181,12 +187,21 @@ bool SimRadio::isSendComplete() {
 
 void SimRadio::onSendFinished() {
     tx_pending_ = false;
+    // Ensure TX is fully released even on timeout paths.
+    tx_in_progress_ = false;
     recv_mode_ = true;
     state_version_++;  // State changed - TX finished
+    MESH_DEBUG_PRINTLN("SimRadio::onSendFinished(): tx finished"); 
 }
 
 void SimRadio::notifyTxComplete() {
+    if (!tx_in_progress_) {
+        // Already released (e.g. via timeout path in onSendFinished) - ignore
+        MESH_DEBUG_PRINTLN("SimRadio::notifyTxComplete(): tx already released, ignoring");
+        return;
+    }
     tx_in_progress_ = false;
+    MESH_DEBUG_PRINTLN("SimRadio::notifyTxComplete(): tx completed (tx_in_progress_ = false)");
     state_version_++;  // State changed - TX complete notification
 }
 
@@ -221,8 +236,62 @@ int SimRadio::getNoiseFloor() const {
     return -120;  // Typical noise floor
 }
 
+void SimRadio::loop() {
+#ifdef SIM_HAS_CHANSTATS
+    // Sim stand-in for the hardware channel-health metrics. Sim has no continuous RSSI,
+    // so busy time is the windowed delta of the cumulative airtime counters (TX credited
+    // at startSendRaw, RX credited per dequeued packet in recvRaw - both mutated on this
+    // firmware thread, so per-call deltas are race-free) plus wall time spent transmitting;
+    // deaf time is wall time with the receiver off (== TX window incl. turnaround).
+    if (!g_sim_ctx) return;
+    uint32_t now = static_cast<uint32_t>(g_sim_ctx->current_millis);
+    uint32_t dt = now - last_loop_ms_;
+    last_loop_ms_ = now;
+    bool deaf = !isInRecvMode();
+    uint32_t busy = deaf ? dt : 0;
+    uint32_t air = total_tx_airtime_ + total_rx_airtime_;
+    uint32_t rx_est = air - last_air_;
+    last_air_ = air;
+    if (!deaf) {
+        if (rx_est > dt) rx_est = dt;   // credit at most the elapsed wall time
+        busy += rx_est;
+    }
+    if (busy > dt) busy = dt;
+    busy_win_.add(now, busy);
+    deaf_win_.add(now, deaf ? dt : 0);
+    // events = ALL attempts (decodes + CRC failures), bad = the failures, so the
+    // ratio is errors-per-attempt rather than errors-per-good-decode.
+    // NOTE: firmware counts only SNR-relevant failures here (weak distant
+    // stations excluded in RadioLibWrapper::recvRaw); the sim stand-in counts
+    // ALL failures because packets_recv_errors_ is never incremented in sim
+    // (d_err == 0 always) - the SNR filter is structurally unobservable in sim.
+    // The ~10 min window length comes from the shared WindowedPercent.h
+    // automatically.
+    uint16_t d_ok = static_cast<uint16_t>(packets_recv_ - last_recv_cnt_);
+    uint16_t d_err = static_cast<uint16_t>(packets_recv_errors_ - last_err_cnt_);
+    err_win_.add(now, static_cast<uint16_t>(d_ok + d_err), d_err);
+    last_recv_cnt_ = packets_recv_;
+    last_err_cnt_ = packets_recv_errors_;
+#endif // SIM_HAS_CHANSTATS
+}
+
+bool SimRadio::isChannelNoisy() {
+    // Sim-only (see header): consume the noise latch one-shot. There is no continuous RSSI in sim,
+    // so a strong injected packet (neighbor/interferer on-air) latches noisy and the dwell probe
+    // reads it once, triggering a dwell deferral window via the Dispatcher's last_channel_noisy_ms.
+    checkForSpin();
+    bool noisy = channel_noisy_latched_;
+    channel_noisy_latched_ = false;
+    return noisy;
+}
+
 void SimRadio::injectRxPacket(const uint8_t* data, size_t len, float rssi, float snr) {
     std::lock_guard<std::mutex> lock(rx_mutex_);
+    
+    // Half-duplex: real LoRa hardware cannot receive while transmitting
+    if (tx_in_progress_) {
+        return;
+    }
     
     // Check queue depth - drop if full (simulates FIFO overflow)
     if (rx_queue_.size() >= RX_QUEUE_DEPTH) {
@@ -242,6 +311,15 @@ void SimRadio::injectRxPacket(const uint8_t* data, size_t len, float rssi, float
     
     rx_queue_.push(pkt);
     state_version_++;  // State changed - packet arrived
+
+    // Latch channel-noisy for the dwell gate if this packet is strong (a close neighbor / interferer
+    // on-air). SF-scaled margin mirrors hardware getDwellRssiMargin() (18 dB @SF7, -1/SF, floor 12).
+    {
+        int sf = static_cast<int>(sf_);
+        int margin = 18 - (sf > 7 ? sf - 7 : 0);
+        if (margin < 12) margin = 12;
+        if (rssi > (float)(getNoiseFloor() + margin)) channel_noisy_latched_ = true;
+    }
 }
 
 uint32_t SimRadio::getTxAirtime() const {
